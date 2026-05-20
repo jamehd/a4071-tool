@@ -18,9 +18,9 @@ if not exist ffmpeg.exe (
 )
 
 python -m pip install --upgrade pip
-python -m pip install --upgrade pyinstaller
+python -m pip install --upgrade pyinstaller faster-whisper
 if errorlevel 1 (
-    echo [ERROR] Failed to install PyInstaller.
+    echo [ERROR] Failed to install PyInstaller or faster-whisper.
     exit /b 1
 )
 
