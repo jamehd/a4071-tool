@@ -46,10 +46,29 @@ class PackCuesTests(unittest.TestCase):
         self.assertTrue(cues[1].lines[0].endswith("."))
 
     def test_max_duration_closes_cue(self) -> None:
-        words = [w(f" w{i}", i * 1.0, i * 1.0 + 0.9) for i in range(10)]
-        cues = pack_cues(words, max_chars_per_line=200, max_lines=2, max_duration=3.0)
+        max_duration = 3.0
+        word_span = 0.9
+        words = [w(f" w{i}", i * 1.0, i * 1.0 + word_span) for i in range(10)]
+        cues = pack_cues(words, max_chars_per_line=200, max_lines=2, max_duration=max_duration)
         for cue in cues:
-            self.assertLessEqual(cue.end - cue.start, 3.5)
+            # A cue may exceed max_duration by up to one word's span because the
+            # cut happens after the word that crosses the threshold.
+            self.assertLessEqual(cue.end - cue.start, max_duration + word_span)
+
+    def test_sentence_end_finalizes_even_when_token_overflows(self) -> None:
+        words = [
+            w("short", 0.0, 0.3),
+            w(" averylongsentencehere.", 0.3, 0.6),
+            w(" Next", 0.7, 1.0),
+        ]
+        cues = pack_cues(words, max_chars_per_line=10, max_lines=3, max_duration=60.0)
+        self.assertTrue(any(c.lines[-1].endswith(".") for c in cues))
+        last_cue_with_period = next(
+            i for i, c in enumerate(cues) if c.lines[-1].endswith(".")
+        )
+        # "Next" must land in a later cue than the one closed by the period.
+        for c in cues[last_cue_with_period + 1:]:
+            self.assertTrue(any("Next" in line for line in c.lines))
 
     def test_indices_are_sequential_from_one(self) -> None:
         words = [w(f" word{i}.", i * 0.5, i * 0.5 + 0.4) for i in range(5)]

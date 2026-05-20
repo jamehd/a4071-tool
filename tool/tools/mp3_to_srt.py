@@ -87,6 +87,10 @@ def pack_cues(
                 cue_start = word.start
                 cue_end = word.end
                 cue_lines = [token]
+            if _ends_sentence(token):
+                finalize()
+                cue_start = word.end
+                cue_end = word.end
             continue
 
         cue_lines[-1] = candidate
