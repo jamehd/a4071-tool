@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tools.mp3_to_srt import Cue, Word, pack_cues
+from tools.mp3_to_srt import Cue, Word, pack_cues, write_srt
 
 
 def w(text: str, start: float, end: float) -> Word:
@@ -74,6 +74,40 @@ class PackCuesTests(unittest.TestCase):
         words = [w(f" word{i}.", i * 0.5, i * 0.5 + 0.4) for i in range(5)]
         cues = pack_cues(words, max_chars_per_line=8, max_lines=1, max_duration=60.0)
         self.assertEqual([c.index for c in cues], list(range(1, len(cues) + 1)))
+
+
+import tempfile
+
+
+class WriteSrtTests(unittest.TestCase):
+    def test_writes_standard_srt(self) -> None:
+        cues = [
+            Cue(index=1, start=0.0, end=1.5, lines=["Hello world."]),
+            Cue(index=2, start=2.0, end=4.25, lines=["Second cue", "second line."]),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.srt"
+            write_srt(cues, path)
+            data = path.read_bytes()
+        text = data.decode("utf-8-sig")
+        self.assertIn("\r\n", text)
+        lines = text.split("\r\n")
+        self.assertEqual(lines[0], "1")
+        self.assertEqual(lines[1], "00:00:00,000 --> 00:00:01,500")
+        self.assertEqual(lines[2], "Hello world.")
+        self.assertEqual(lines[3], "")
+        self.assertEqual(lines[4], "2")
+        self.assertEqual(lines[5], "00:00:02,000 --> 00:00:04,250")
+        self.assertEqual(lines[6], "Second cue")
+        self.assertEqual(lines[7], "second line.")
+
+    def test_timestamp_formats_hours_and_milliseconds(self) -> None:
+        cues = [Cue(index=1, start=3661.789, end=3662.001, lines=["x"])]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.srt"
+            write_srt(cues, path)
+            text = path.read_text(encoding="utf-8-sig")
+        self.assertIn("01:01:01,789 --> 01:01:02,001", text)
 
 
 if __name__ == "__main__":

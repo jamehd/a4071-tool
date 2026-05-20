@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 SENTENCE_END = {".", "?", "!"}
@@ -103,3 +104,26 @@ def pack_cues(
 
     finalize()
     return cues
+
+
+def _format_timestamp(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0.0
+    total_ms = int(round(seconds * 1000))
+    hours, rem = divmod(total_ms, 3600 * 1000)
+    minutes, rem = divmod(rem, 60 * 1000)
+    secs, ms = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
+def write_srt(cues: list[Cue], srt_path: Path) -> None:
+    parts: list[str] = []
+    for cue in cues:
+        parts.append(str(cue.index))
+        parts.append(f"{_format_timestamp(cue.start)} --> {_format_timestamp(cue.end)}")
+        parts.extend(cue.lines)
+        parts.append("")
+    body = "\r\n".join(parts)
+    if not body.endswith("\r\n"):
+        body += "\r\n"
+    srt_path.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
