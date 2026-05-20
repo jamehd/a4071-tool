@@ -30,8 +30,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-for /f "delims=" %%i in ('python -c "import nvidia.cublas, os; print(os.path.dirname(nvidia.cublas.__file__))"') do set CUBLAS_DIR=%%i\bin
-for /f "delims=" %%i in ('python -c "import nvidia.cudnn, os; print(os.path.dirname(nvidia.cudnn.__file__))"') do set CUDNN_DIR=%%i\bin
+for /f "delims=" %%i in ('python -c "import nvidia.cublas; print(nvidia.cublas.__path__[0])"') do set CUBLAS_DIR=%%i\bin
+for /f "delims=" %%i in ('python -c "import nvidia.cudnn; print(nvidia.cudnn.__path__[0])"') do set CUDNN_DIR=%%i\bin
 if not exist "%CUBLAS_DIR%" (
     echo [ERROR] cuBLAS wheel bin directory missing: %CUBLAS_DIR%
     exit /b 1
