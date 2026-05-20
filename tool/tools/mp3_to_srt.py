@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,3 +128,20 @@ def write_srt(cues: list[Cue], srt_path: Path) -> None:
     if not body.endswith("\r\n"):
         body += "\r\n"
     srt_path.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+
+
+def _exe_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
+
+
+def find_model_dir(model_name: str = "medium.en") -> Path | None:
+    candidate = _exe_dir() / "models" / model_name
+    if not candidate.is_dir():
+        return None
+    if not (candidate / "model.bin").is_file():
+        return None
+    if not (candidate / "config.json").is_file():
+        return None
+    return candidate
