@@ -5,10 +5,12 @@ hiddenimports = []
 hiddenimports += collect_submodules('tools')
 hiddenimports += collect_submodules('ctranslate2')
 hiddenimports += ['faster_whisper']
+hiddenimports += collect_submodules('onnxruntime')
 
 datas = []
 datas += collect_data_files('faster_whisper')
 datas += copy_metadata('faster-whisper')
+datas += collect_data_files('onnxruntime')
 
 
 a = Analysis(

@@ -39,6 +39,8 @@ python -m PyInstaller ^
     --hidden-import faster_whisper ^
     --collect-data faster_whisper ^
     --copy-metadata faster-whisper ^
+    --collect-submodules onnxruntime ^
+    --collect-data onnxruntime ^
     a4071_tool.py
 if errorlevel 1 (
     echo [ERROR] PyInstaller build failed.
