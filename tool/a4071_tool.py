@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
+from login_screen import LoginScreen
+from tools.auth import (
+    VerifyInvalid,
+    VerifyNetworkError,
+    VerifyOk,
+    clear_config,
+    load_config,
+    save_config,
+    verify_key,
+)
 from tools.base import ToolPage
 from tools.mp3_merger import MP3MergerPage
 
@@ -24,6 +35,8 @@ CONTENT_BG = "#f8fafc"
 HEADER_BG = "#ffffff"
 HEADER_DIVIDER = "#e5e7eb"
 HEADER_FG = "#111827"
+HEADER_MUTED_FG = "#6b7280"
+HEADER_LINK_FG = "#2563eb"
 
 
 def app_root() -> Path:
@@ -75,17 +88,68 @@ class A4071App(tk.Tk):
         self.minsize(860, 560)
         self.configure(bg=CONTENT_BG)
 
+        self._screen: tk.Frame | None = None
         self._pages: dict[str, ToolPage] = {}
         self._sidebar_items: dict[str, SidebarItem] = {}
         self._active_key: str | None = None
 
-        self._build_ui()
-        self._register_tools()
-        if self._pages:
-            self.show_page(next(iter(self._pages)))
+        self.after(0, self._bootstrap)
 
-    def _build_ui(self) -> None:
-        sidebar = tk.Frame(self, bg=SIDEBAR_BG, width=220)
+    def _bootstrap(self) -> None:
+        cfg = load_config()
+        if not cfg:
+            self._show_login()
+            return
+        self._show_verifying()
+
+        def worker() -> None:
+            result = verify_key(cfg["api_key"])
+            self.after(0, lambda: self._handle_bootstrap(cfg, result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_bootstrap(self, cfg: dict, result) -> None:
+        if isinstance(result, VerifyOk):
+            if result.name and result.name != cfg.get("name"):
+                save_config(cfg["api_key"], result.name)
+            self._show_main(result.name or cfg.get("name", ""))
+        elif isinstance(result, VerifyInvalid):
+            clear_config()
+            self._show_login(initial_error="Key đã bị thu hồi. Đăng nhập lại.")
+        elif isinstance(result, VerifyNetworkError):
+            self._show_login(
+                initial_error=f"Không kết nối được server. Thử lại. ({result.message})"
+            )
+
+    def _swap_screen(self, new_screen: tk.Frame) -> None:
+        if self._screen is not None:
+            self._screen.destroy()
+        self._screen = new_screen
+        new_screen.pack(fill="both", expand=True)
+
+    def _show_verifying(self) -> None:
+        screen = tk.Frame(self, bg=CONTENT_BG)
+        tk.Label(
+            screen, text="Đang xác thực…", bg=CONTENT_BG, fg=HEADER_MUTED_FG,
+            font=("Segoe UI", 11),
+        ).place(relx=0.5, rely=0.5, anchor="center")
+        self._swap_screen(screen)
+
+    def _show_login(self, initial_error: str | None = None) -> None:
+        self._pages.clear()
+        self._sidebar_items.clear()
+        self._active_key = None
+        screen = LoginScreen(self, on_success=self._on_login_success, initial_error=initial_error)
+        self._swap_screen(screen)
+
+    def _on_login_success(self, api_key: str, name: str) -> None:
+        save_config(api_key, name)
+        self._show_main(name)
+
+    def _show_main(self, name: str) -> None:
+        screen = tk.Frame(self, bg=CONTENT_BG)
+
+        sidebar = tk.Frame(screen, bg=SIDEBAR_BG, width=220)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
@@ -103,7 +167,7 @@ class A4071App(tk.Tk):
             font=("Segoe UI", 8), padx=20, pady=10, anchor="w",
         ).pack(fill="x", side="bottom")
 
-        right = tk.Frame(self, bg=CONTENT_BG)
+        right = tk.Frame(screen, bg=CONTENT_BG)
         right.pack(side="left", fill="both", expand=True)
 
         header = tk.Frame(right, bg=HEADER_BG, height=56)
@@ -115,14 +179,37 @@ class A4071App(tk.Tk):
         )
         self._page_title.pack(side="left", fill="y")
         self._page_desc = tk.Label(
-            header, text="", bg=HEADER_BG, fg="#6b7280",
+            header, text="", bg=HEADER_BG, fg=HEADER_MUTED_FG,
             font=("Segoe UI", 9), padx=8, anchor="w",
         )
         self._page_desc.pack(side="left", fill="y")
+
+        logout_btn = tk.Label(
+            header, text="Đăng xuất", bg=HEADER_BG, fg=HEADER_LINK_FG,
+            font=("Segoe UI", 9, "underline"), padx=20, cursor="hand2",
+        )
+        logout_btn.pack(side="right", fill="y")
+        logout_btn.bind("<Button-1>", lambda _e: self._on_logout())
+
+        if name:
+            tk.Label(
+                header, text=name, bg=HEADER_BG, fg=HEADER_MUTED_FG,
+                font=("Segoe UI", 9), padx=8,
+            ).pack(side="right", fill="y")
+
         tk.Frame(right, bg=HEADER_DIVIDER, height=1).pack(fill="x")
 
         self._content = tk.Frame(right, bg=CONTENT_BG)
         self._content.pack(fill="both", expand=True)
+
+        self._swap_screen(screen)
+        self._register_tools()
+        if self._pages:
+            self.show_page(next(iter(self._pages)))
+
+    def _on_logout(self) -> None:
+        clear_config()
+        self._show_login()
 
     def _register_tools(self) -> None:
         tool_classes: list[type[ToolPage]] = [MP3MergerPage]
