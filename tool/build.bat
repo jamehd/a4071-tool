@@ -24,6 +24,23 @@ if errorlevel 1 (
     exit /b 1
 )
 
+python -m pip install --upgrade nvidia-cublas-cu12 nvidia-cudnn-cu12
+if errorlevel 1 (
+    echo [ERROR] Failed to install CUDA runtime wheels.
+    exit /b 1
+)
+
+for /f "delims=" %%i in ('python -c "import nvidia.cublas, os; print(os.path.dirname(nvidia.cublas.__file__))"') do set CUBLAS_DIR=%%i\bin
+for /f "delims=" %%i in ('python -c "import nvidia.cudnn, os; print(os.path.dirname(nvidia.cudnn.__file__))"') do set CUDNN_DIR=%%i\bin
+if not exist "%CUBLAS_DIR%" (
+    echo [ERROR] cuBLAS wheel bin directory missing: %CUBLAS_DIR%
+    exit /b 1
+)
+if not exist "%CUDNN_DIR%" (
+    echo [ERROR] cuDNN wheel bin directory missing: %CUDNN_DIR%
+    exit /b 1
+)
+
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist A4071-Tool.spec del /q A4071-Tool.spec
@@ -52,9 +69,22 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if not exist dist\cuda mkdir dist\cuda
+copy /Y "%CUBLAS_DIR%\*.dll" dist\cuda\ >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy cuBLAS DLLs to dist\cuda\.
+    exit /b 1
+)
+copy /Y "%CUDNN_DIR%\*.dll" dist\cuda\ >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy cuDNN DLLs to dist\cuda\.
+    exit /b 1
+)
+
 echo.
 echo ============================================================
-echo  Build complete: dist\A4071-Tool.exe + dist\ffmpeg.exe
-echo  Distribute the dist\ folder. ffmpeg.exe must stay alongside.
+echo  Build complete: dist\A4071-Tool.exe + dist\ffmpeg.exe + dist\cuda\
+echo  Distribute the entire dist\ folder. ffmpeg.exe and cuda\ must
+echo  stay alongside A4071-Tool.exe.
 echo ============================================================
 endlocal

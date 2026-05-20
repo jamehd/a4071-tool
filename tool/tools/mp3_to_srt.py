@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import tkinter as tk
@@ -187,7 +188,20 @@ DEVICE_GPU = "cuda"
 DEVICE_LABELS = {DEVICE_CPU: "CPU", DEVICE_GPU: "GPU (CUDA)"}
 
 
+def _register_cuda_dll_dir() -> None:
+    if not hasattr(os, "add_dll_directory"):
+        return
+    cuda_dir = _exe_dir() / "cuda"
+    if cuda_dir.is_dir():
+        try:
+            os.add_dll_directory(str(cuda_dir))
+        except OSError:
+            pass
+
+
 def _load_model(model_dir: Path, device: str):
+    if device == DEVICE_GPU:
+        _register_cuda_dll_dir()
     from faster_whisper import WhisperModel
 
     if device == DEVICE_GPU:
