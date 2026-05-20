@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 
 SENTENCE_END = {".", "?", "!"}
@@ -145,3 +146,69 @@ def find_model_dir(model_name: str = "medium.en") -> Path | None:
     if not (candidate / "config.json").is_file():
         return None
     return candidate
+
+
+class CancelledError(Exception):
+    pass
+
+
+class ModelMissingError(Exception):
+    pass
+
+
+def _load_model(model_dir: Path):
+    from faster_whisper import WhisperModel
+
+    try:
+        return WhisperModel(str(model_dir), device="auto", compute_type="float16"), "GPU (CUDA)"
+    except Exception:
+        return WhisperModel(str(model_dir), device="cpu", compute_type="int8"), "CPU"
+
+
+def transcribe_mp3(
+    mp3_path: Path,
+    model_dir: Path | None,
+    on_log: Callable[[str], None],
+    on_progress: Callable[[float, str], None],
+    on_device: Callable[[str], None],
+    is_cancelled: Callable[[], bool],
+) -> list[Word]:
+    if model_dir is None:
+        raise ModelMissingError(
+            "Không tìm thấy model medium.en. Tải tại "
+            "https://huggingface.co/Systran/faster-whisper-medium.en và giải nén "
+            "vào thư mục models/medium.en/ cạnh A4071-Tool.exe."
+        )
+
+    on_log("Đang nạp model...\n")
+    model, device_label = _load_model(model_dir)
+    on_device(device_label)
+    on_log(f"Đã nạp model trên {device_label}.\n")
+
+    segments, info = model.transcribe(
+        str(mp3_path),
+        language="en",
+        word_timestamps=True,
+        vad_filter=True,
+    )
+    duration = max(float(info.duration or 0.0), 0.001)
+
+    collected: list[Word] = []
+    for segment in segments:
+        if is_cancelled():
+            raise CancelledError()
+
+        start_ts = _format_timestamp(segment.start)
+        end_ts = _format_timestamp(segment.end)
+        on_log(f"[{start_ts} → {end_ts}] {segment.text.strip()}\n")
+
+        if segment.words:
+            for word in segment.words:
+                collected.append(Word(start=float(word.start), end=float(word.end), text=word.word))
+        else:
+            collected.append(Word(start=float(segment.start), end=float(segment.end), text=segment.text))
+
+        pct = min(99.0, (segment.end / duration) * 100.0)
+        on_progress(pct, f"Đang phiên âm... {pct:.0f}%")
+
+    return collected
