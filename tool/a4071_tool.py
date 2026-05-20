@@ -84,9 +84,8 @@ class A4071App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1020x660")
-        self.minsize(860, 560)
         self.configure(bg=CONTENT_BG)
+        self.minsize(0, 0)
 
         self._screen: tk.Frame | None = None
         self._pages: dict[str, ToolPage] = {}
@@ -127,7 +126,20 @@ class A4071App(tk.Tk):
         self._screen = new_screen
         new_screen.pack(fill="both", expand=True)
 
+    def _set_window(self, width: int, height: int, resizable: bool) -> None:
+        self.resizable(resizable, resizable)
+        if resizable:
+            self.minsize(860, 560)
+        else:
+            self.minsize(width, height)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
     def _show_verifying(self) -> None:
+        self._set_window(420, 400, resizable=False)
         screen = tk.Frame(self, bg=CONTENT_BG)
         tk.Label(
             screen, text="Đang xác thực…", bg=CONTENT_BG, fg=HEADER_MUTED_FG,
@@ -139,6 +151,7 @@ class A4071App(tk.Tk):
         self._pages.clear()
         self._sidebar_items.clear()
         self._active_key = None
+        self._set_window(420, 400, resizable=False)
         screen = LoginScreen(self, on_success=self._on_login_success, initial_error=initial_error)
         self._swap_screen(screen)
 
@@ -147,6 +160,7 @@ class A4071App(tk.Tk):
         self._show_main(name)
 
     def _show_main(self, name: str) -> None:
+        self._set_window(1020, 660, resizable=True)
         screen = tk.Frame(self, bg=CONTENT_BG)
 
         sidebar = tk.Frame(screen, bg=SIDEBAR_BG, width=220)

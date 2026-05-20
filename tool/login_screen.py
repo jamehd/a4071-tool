@@ -32,12 +32,12 @@ class LoginScreen(tk.Frame):
         on_success: Callable[[str, str], None],
         initial_error: str | None = None,
     ) -> None:
-        super().__init__(parent, bg=PAGE_BG)
+        super().__init__(parent, bg=CARD_BG)
         self._on_success = on_success
         self._busy = False
 
-        card = tk.Frame(self, bg=CARD_BG, highlightthickness=1, highlightbackground=BORDER)
-        card.place(relx=0.5, rely=0.5, anchor="center", width=380)
+        card = tk.Frame(self, bg=CARD_BG)
+        card.pack(fill="both", expand=True)
 
         tk.Label(
             card, text="A4071-Tool", bg=CARD_BG, fg=TITLE_FG,
