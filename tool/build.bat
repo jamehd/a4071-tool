@@ -33,7 +33,6 @@ python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --name A4071-Tool ^
-    --add-binary "ffmpeg.exe;." ^
     --collect-submodules tools ^
     --collect-submodules ctranslate2 ^
     --hidden-import faster_whisper ^
@@ -47,9 +46,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+copy /Y ffmpeg.exe dist\ffmpeg.exe >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy ffmpeg.exe to dist\.
+    exit /b 1
+)
+
 echo.
 echo ============================================================
-echo  Build complete: dist\A4071-Tool.exe
-echo  ffmpeg.exe is embedded. Distribute the single .exe file.
+echo  Build complete: dist\A4071-Tool.exe + dist\ffmpeg.exe
+echo  Distribute the dist\ folder. ffmpeg.exe must stay alongside.
 echo ============================================================
 endlocal
