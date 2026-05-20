@@ -24,7 +24,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -m pip install --upgrade nvidia-cublas-cu12 nvidia-cudnn-cu12
+python -m pip install --upgrade nvidia-cublas-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12
 if errorlevel 1 (
     echo [ERROR] Failed to install CUDA runtime wheels.
     exit /b 1
@@ -32,12 +32,17 @@ if errorlevel 1 (
 
 for /f "delims=" %%i in ('python -c "import nvidia.cublas; print(nvidia.cublas.__path__[0])"') do set CUBLAS_DIR=%%i\bin
 for /f "delims=" %%i in ('python -c "import nvidia.cudnn; print(nvidia.cudnn.__path__[0])"') do set CUDNN_DIR=%%i\bin
+for /f "delims=" %%i in ('python -c "import nvidia.cuda_nvrtc; print(nvidia.cuda_nvrtc.__path__[0])"') do set NVRTC_DIR=%%i\bin
 if not exist "%CUBLAS_DIR%" (
     echo [ERROR] cuBLAS wheel bin directory missing: %CUBLAS_DIR%
     exit /b 1
 )
 if not exist "%CUDNN_DIR%" (
     echo [ERROR] cuDNN wheel bin directory missing: %CUDNN_DIR%
+    exit /b 1
+)
+if not exist "%NVRTC_DIR%" (
+    echo [ERROR] NVRTC wheel bin directory missing: %NVRTC_DIR%
     exit /b 1
 )
 
@@ -78,6 +83,11 @@ if errorlevel 1 (
 copy /Y "%CUDNN_DIR%\*.dll" dist\cuda\ >nul
 if errorlevel 1 (
     echo [ERROR] Failed to copy cuDNN DLLs to dist\cuda\.
+    exit /b 1
+)
+copy /Y "%NVRTC_DIR%\*.dll" dist\cuda\ >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy NVRTC DLLs to dist\cuda\.
     exit /b 1
 )
 

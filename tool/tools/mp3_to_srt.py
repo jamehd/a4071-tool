@@ -189,12 +189,14 @@ DEVICE_LABELS = {DEVICE_CPU: "CPU", DEVICE_GPU: "GPU (CUDA)"}
 
 
 def _register_cuda_dll_dir() -> None:
-    if not hasattr(os, "add_dll_directory"):
-        return
     cuda_dir = _exe_dir() / "cuda"
-    if cuda_dir.is_dir():
+    if not cuda_dir.is_dir():
+        return
+    cuda_str = str(cuda_dir)
+    os.environ["PATH"] = cuda_str + os.pathsep + os.environ.get("PATH", "")
+    if hasattr(os, "add_dll_directory"):
         try:
-            os.add_dll_directory(str(cuda_dir))
+            os.add_dll_directory(cuda_str)
         except OSError:
             pass
 
