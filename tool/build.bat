@@ -35,6 +35,10 @@ python -m PyInstaller ^
     --name A4071-Tool ^
     --add-binary "ffmpeg.exe;." ^
     --collect-submodules tools ^
+    --collect-submodules ctranslate2 ^
+    --hidden-import faster_whisper ^
+    --collect-data faster_whisper ^
+    --copy-metadata faster-whisper ^
     a4071_tool.py
 if errorlevel 1 (
     echo [ERROR] PyInstaller build failed.

@@ -1,15 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, copy_metadata
 
 hiddenimports = []
 hiddenimports += collect_submodules('tools')
+hiddenimports += collect_submodules('ctranslate2')
+hiddenimports += ['faster_whisper']
+
+datas = []
+datas += collect_data_files('faster_whisper')
+datas += copy_metadata('faster-whisper')
 
 
 a = Analysis(
     ['a4071_tool.py'],
     pathex=[],
     binaries=[('ffmpeg.exe', '.')],
-    datas=[],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
