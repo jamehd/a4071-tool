@@ -168,21 +168,25 @@ class ModelMissingError(Exception):
     pass
 
 
-def _load_model(model_dir: Path):
+DEVICE_CPU = "cpu"
+DEVICE_GPU = "cuda"
+DEVICE_LABELS = {DEVICE_CPU: "CPU", DEVICE_GPU: "GPU (CUDA)"}
+
+
+def _load_model(model_dir: Path, device: str):
     from faster_whisper import WhisperModel
 
-    try:
-        return WhisperModel(str(model_dir), device="auto", compute_type="float16"), "GPU (CUDA)"
-    except Exception:
-        return WhisperModel(str(model_dir), device="cpu", compute_type="int8"), "CPU"
+    if device == DEVICE_GPU:
+        return WhisperModel(str(model_dir), device="cuda", compute_type="float16"), DEVICE_LABELS[DEVICE_GPU]
+    return WhisperModel(str(model_dir), device="cpu", compute_type="int8"), DEVICE_LABELS[DEVICE_CPU]
 
 
 def transcribe_mp3(
     mp3_path: Path,
     model_dir: Path | None,
+    device: str,
     on_log: Callable[[str], None],
     on_progress: Callable[[float, str], None],
-    on_device: Callable[[str], None],
     is_cancelled: Callable[[], bool],
 ) -> list[Word]:
     if model_dir is None:
@@ -193,8 +197,7 @@ def transcribe_mp3(
         )
 
     on_log("Đang nạp model...\n")
-    model, device_label = _load_model(model_dir)
-    on_device(device_label)
+    model, device_label = _load_model(model_dir, device)
     on_log(f"Đã nạp model trên {device_label}.\n")
 
     segments, info = model.transcribe(
@@ -483,6 +486,17 @@ class MP3ToSrtPage(ToolPage):
         ttk.Button(card, text="Lưu thành...", command=self._pick_out).grid(
             row=1, column=2, pady=4)
 
+        tk.Label(card, text="Thiết bị:", bg=CARD_BG, fg=LABEL_FG).grid(
+            row=2, column=0, sticky="w", pady=4)
+        self.device_select_var = tk.StringVar(value=DEVICE_LABELS[DEVICE_CPU])
+        ttk.Combobox(
+            card,
+            textvariable=self.device_select_var,
+            values=[DEVICE_LABELS[DEVICE_CPU], DEVICE_LABELS[DEVICE_GPU]],
+            state="readonly",
+            width=18,
+        ).grid(row=2, column=1, sticky="w", padx=8, pady=4)
+
         card.columnconfigure(1, weight=1)
 
         bar = tk.Frame(outer, bg=PAGE_BG)
@@ -492,8 +506,6 @@ class MP3ToSrtPage(ToolPage):
         self.cancel_btn = ttk.Button(bar, text="Hủy", command=self._cancel, state="disabled")
         self.cancel_btn.pack(side="left", padx=8)
         ttk.Button(bar, text="Xóa log", command=self._clear_log).pack(side="left")
-        self.device_var = tk.StringVar(value="Thiết bị: auto")
-        tk.Label(bar, textvariable=self.device_var, bg=PAGE_BG, fg=MUTED_FG).pack(side="right")
 
         log_card = tk.LabelFrame(
             outer, text=" Nhật ký ", bg=CARD_BG, fg=LABEL_FG,
@@ -553,8 +565,9 @@ class MP3ToSrtPage(ToolPage):
     def _set_status(self, msg: str) -> None:
         self.frame.after(0, lambda: self.status_var.set(msg))
 
-    def _set_device(self, label: str) -> None:
-        self.frame.after(0, lambda: self.device_var.set(f"Thiết bị: {label}"))
+    def _selected_device(self) -> str:
+        label = self.device_select_var.get()
+        return DEVICE_GPU if label == DEVICE_LABELS[DEVICE_GPU] else DEVICE_CPU
 
     def _cancel(self) -> None:
         if self._busy:
@@ -592,6 +605,7 @@ class MP3ToSrtPage(ToolPage):
             ):
                 return
             target_dir = _exe_dir() / "models" / MODEL_NAME
+            device = self._selected_device()
 
             def on_download_finish(success: bool, error: str | None) -> None:
                 if not success:
@@ -604,15 +618,15 @@ class MP3ToSrtPage(ToolPage):
                     messagebox.showerror("Lỗi", "Tải xong nhưng vẫn không tìm thấy model.")
                     self._set_status("Sẵn sàng")
                     return
-                self._launch_transcription(src_path, out_path, retry_dir)
+                self._launch_transcription(src_path, out_path, retry_dir, device)
 
             self._set_status("Đang tải model...")
             ModelDownloadDialog(self.frame, target_dir, on_download_finish)
             return
 
-        self._launch_transcription(src_path, out_path, model_dir)
+        self._launch_transcription(src_path, out_path, model_dir, self._selected_device())
 
-    def _launch_transcription(self, src_path: Path, out_path: Path, model_dir: Path) -> None:
+    def _launch_transcription(self, src_path: Path, out_path: Path, model_dir: Path, device: str) -> None:
         self._busy = True
         self._cancel_flag = False
         self.start_btn.configure(state="disabled")
@@ -620,18 +634,18 @@ class MP3ToSrtPage(ToolPage):
         self._set_status("Đang nạp model...")
         threading.Thread(
             target=self._do_run,
-            args=(src_path, out_path, model_dir),
+            args=(src_path, out_path, model_dir, device),
             daemon=True,
         ).start()
 
-    def _do_run(self, mp3_path: Path, out_path: Path, model_dir: Path) -> None:
+    def _do_run(self, mp3_path: Path, out_path: Path, model_dir: Path, device: str) -> None:
         try:
             words = transcribe_mp3(
                 mp3_path=mp3_path,
                 model_dir=model_dir,
+                device=device,
                 on_log=self._log,
                 on_progress=lambda pct, msg: self._set_status(msg),
-                on_device=self._set_device,
                 is_cancelled=lambda: self._cancel_flag,
             )
             if self._cancel_flag:
