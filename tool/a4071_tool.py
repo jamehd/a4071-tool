@@ -18,6 +18,7 @@ from tools.auth import (
 )
 from tools.base import ToolPage
 from tools.mp3_merger import MP3MergerPage
+from tools.mp3_to_srt import MP3ToSrtPage
 
 
 APP_TITLE = "A4071-Tool"
@@ -226,7 +227,7 @@ class A4071App(tk.Tk):
         self._show_login()
 
     def _register_tools(self) -> None:
-        tool_classes: list[type[ToolPage]] = [MP3MergerPage]
+        tool_classes: list[type[ToolPage]] = [MP3MergerPage, MP3ToSrtPage]
         for cls in tool_classes:
             page = cls(self._content, self)
             self._pages[page.name] = page
