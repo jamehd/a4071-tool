@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import sys
+import threading
+import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable
+
+from .base import ToolPage
 
 
 SENTENCE_END = {".", "?", "!"}
+
+CARD_BG = "#ffffff"
+PAGE_BG = "#f8fafc"
+LABEL_FG = "#374151"
+MUTED_FG = "#6b7280"
 
 
 @dataclass(frozen=True)
@@ -212,3 +222,198 @@ def transcribe_mp3(
         on_progress(pct, f"Đang phiên âm... {pct:.0f}%")
 
     return collected
+
+
+class MP3ToSrtPage(ToolPage):
+    name = "MP3 to SRT"
+    description = "Phiên âm MP3 thành phụ đề SRT cho video caption"
+
+    def __init__(self, parent: tk.Misc, app) -> None:
+        self._busy = False
+        self._cancel_flag = False
+        super().__init__(parent, app)
+
+    def build_ui(self, parent: tk.Misc) -> None:
+        outer = tk.Frame(parent, bg=PAGE_BG)
+        outer.pack(fill="both", expand=True, padx=20, pady=16)
+
+        card = tk.LabelFrame(
+            outer, text=" Đầu vào ", bg=CARD_BG, fg=LABEL_FG,
+            font=("Segoe UI Semibold", 10), padx=12, pady=10,
+            bd=1, relief="solid",
+        )
+        card.pack(fill="x")
+
+        tk.Label(card, text="File MP3:", bg=CARD_BG, fg=LABEL_FG).grid(
+            row=0, column=0, sticky="w", pady=4)
+        self.src_var = tk.StringVar()
+        tk.Entry(card, textvariable=self.src_var).grid(
+            row=0, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Button(card, text="Chọn...", command=self._pick_src).grid(
+            row=0, column=2, pady=4)
+
+        tk.Label(card, text="File xuất ra:", bg=CARD_BG, fg=LABEL_FG).grid(
+            row=1, column=0, sticky="w", pady=4)
+        self.out_var = tk.StringVar()
+        tk.Entry(card, textvariable=self.out_var).grid(
+            row=1, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Button(card, text="Lưu thành...", command=self._pick_out).grid(
+            row=1, column=2, pady=4)
+
+        card.columnconfigure(1, weight=1)
+
+        bar = tk.Frame(outer, bg=PAGE_BG)
+        bar.pack(fill="x", pady=(10, 8))
+        self.start_btn = ttk.Button(bar, text="Bắt đầu", command=self._start)
+        self.start_btn.pack(side="left")
+        self.cancel_btn = ttk.Button(bar, text="Hủy", command=self._cancel, state="disabled")
+        self.cancel_btn.pack(side="left", padx=8)
+        ttk.Button(bar, text="Xóa log", command=self._clear_log).pack(side="left")
+        self.device_var = tk.StringVar(value="Thiết bị: auto")
+        tk.Label(bar, textvariable=self.device_var, bg=PAGE_BG, fg=MUTED_FG).pack(side="right")
+
+        log_card = tk.LabelFrame(
+            outer, text=" Nhật ký ", bg=CARD_BG, fg=LABEL_FG,
+            font=("Segoe UI Semibold", 10), padx=6, pady=6,
+            bd=1, relief="solid",
+        )
+        log_card.pack(fill="both", expand=True)
+        self.log_box = tk.Text(
+            log_card, height=10, wrap="word", bd=0,
+            highlightthickness=0, state="disabled",
+        )
+        log_vsb = ttk.Scrollbar(log_card, orient="vertical", command=self.log_box.yview)
+        self.log_box.configure(yscrollcommand=log_vsb.set)
+        self.log_box.grid(row=0, column=0, sticky="nsew")
+        log_vsb.grid(row=0, column=1, sticky="ns")
+        log_card.rowconfigure(0, weight=1)
+        log_card.columnconfigure(0, weight=1)
+
+        self.status_var = tk.StringVar(value="Sẵn sàng")
+        tk.Label(
+            outer, textvariable=self.status_var, bg=PAGE_BG,
+            fg=MUTED_FG, anchor="w",
+        ).pack(fill="x", pady=(6, 0))
+
+    def _pick_src(self) -> None:
+        f = filedialog.askopenfilename(
+            title="Chọn file MP3",
+            filetypes=[("File MP3", "*.mp3"), ("Tất cả file", "*.*")],
+        )
+        if f:
+            self.src_var.set(f)
+            if not self.out_var.get():
+                self.out_var.set(str(Path(f).with_suffix(".srt")))
+
+    def _pick_out(self) -> None:
+        f = filedialog.asksaveasfilename(
+            title="Lưu file SRT",
+            defaultextension=".srt",
+            filetypes=[("File SRT", "*.srt"), ("Tất cả file", "*.*")],
+        )
+        if f:
+            self.out_var.set(f)
+
+    def _clear_log(self) -> None:
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+
+    def _log(self, msg: str) -> None:
+        def do() -> None:
+            self.log_box.configure(state="normal")
+            self.log_box.insert("end", msg)
+            self.log_box.see("end")
+            self.log_box.configure(state="disabled")
+        self.frame.after(0, do)
+
+    def _set_status(self, msg: str) -> None:
+        self.frame.after(0, lambda: self.status_var.set(msg))
+
+    def _set_device(self, label: str) -> None:
+        self.frame.after(0, lambda: self.device_var.set(f"Thiết bị: {label}"))
+
+    def _cancel(self) -> None:
+        if self._busy:
+            self._cancel_flag = True
+            self._set_status("Đang hủy...")
+
+    def _start(self) -> None:
+        if self._busy:
+            return
+        src = self.src_var.get().strip()
+        out = self.out_var.get().strip()
+        if not src or not Path(src).is_file():
+            messagebox.showerror("Lỗi", "Hãy chọn file MP3 hợp lệ.")
+            return
+        if not out:
+            messagebox.showerror("Lỗi", "Hãy chọn đường dẫn file SRT.")
+            return
+        src_path = Path(src)
+        out_path = Path(out)
+        try:
+            if src_path.resolve() == out_path.resolve():
+                messagebox.showerror("Lỗi", "File xuất ra trùng với file nguồn.")
+                return
+        except OSError:
+            pass
+        if out_path.exists():
+            if not messagebox.askyesno("Ghi đè?", f"{out_path} đã tồn tại.\nGhi đè?"):
+                return
+
+        model_dir = find_model_dir("medium.en")
+        if model_dir is None:
+            messagebox.showerror(
+                "Thiếu model",
+                "Không tìm thấy model medium.en.\n\n"
+                "Tải tại: https://huggingface.co/Systran/faster-whisper-medium.en\n"
+                "Giải nén vào thư mục models/medium.en/ cạnh A4071-Tool.exe.",
+            )
+            return
+
+        self._busy = True
+        self._cancel_flag = False
+        self.start_btn.configure(state="disabled")
+        self.cancel_btn.configure(state="normal")
+        self._set_status("Đang nạp model...")
+        threading.Thread(
+            target=self._do_run,
+            args=(src_path, out_path, model_dir),
+            daemon=True,
+        ).start()
+
+    def _do_run(self, mp3_path: Path, out_path: Path, model_dir: Path) -> None:
+        try:
+            words = transcribe_mp3(
+                mp3_path=mp3_path,
+                model_dir=model_dir,
+                on_log=self._log,
+                on_progress=lambda pct, msg: self._set_status(msg),
+                on_device=self._set_device,
+                is_cancelled=lambda: self._cancel_flag,
+            )
+            if self._cancel_flag:
+                raise CancelledError()
+            self._set_status("Đang ghi SRT...")
+            cues = pack_cues(words)
+            write_srt(cues, out_path)
+            self._log(f"\nĐã ghi {len(cues)} cue → {out_path}\n")
+            self._set_status(f"Hoàn tất: {out_path}")
+            self.frame.after(0, lambda: messagebox.showinfo(
+                "Hoàn tất", f"Đã tạo phụ đề:\n{out_path}"))
+        except CancelledError:
+            self._log("\nĐã hủy.\n")
+            self._set_status("Đã hủy")
+        except ModelMissingError as exc:
+            self._log(f"\n{exc}\n")
+            self._set_status("Thiếu model")
+            self.frame.after(0, lambda e=exc: messagebox.showerror("Thiếu model", str(e)))
+        except Exception as exc:
+            self._log(f"\nLỗi: {exc}\n")
+            self._set_status(f"Lỗi: {exc}")
+            self.frame.after(0, lambda e=exc: messagebox.showerror("Lỗi", str(e)))
+        finally:
+            self._busy = False
+            self._cancel_flag = False
+            self.frame.after(0, lambda: self.start_btn.configure(state="normal"))
+            self.frame.after(0, lambda: self.cancel_btn.configure(state="disabled"))
