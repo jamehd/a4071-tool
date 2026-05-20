@@ -149,7 +149,21 @@ def _exe_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def find_model_dir(model_name: str = "medium.en") -> Path | None:
+MODEL_SIZES = ["tiny.en", "base.en", "small.en", "medium.en"]
+MODEL_SIZE_HINTS = {
+    "tiny.en": "~75 MB",
+    "base.en": "~140 MB",
+    "small.en": "~470 MB",
+    "medium.en": "~1.5 GB",
+}
+DEFAULT_MODEL_SIZE = "small.en"
+
+
+def _model_repo_url(model_name: str) -> str:
+    return f"https://huggingface.co/Systran/faster-whisper-{model_name}/resolve/main"
+
+
+def find_model_dir(model_name: str = DEFAULT_MODEL_SIZE) -> Path | None:
     candidate = _exe_dir() / "models" / model_name
     if not candidate.is_dir():
         return None
@@ -190,11 +204,7 @@ def transcribe_mp3(
     is_cancelled: Callable[[], bool],
 ) -> list[Word]:
     if model_dir is None:
-        raise ModelMissingError(
-            "Không tìm thấy model medium.en. Tải tại "
-            "https://huggingface.co/Systran/faster-whisper-medium.en và giải nén "
-            "vào thư mục models/medium.en/ cạnh A4071-Tool.exe."
-        )
+        raise ModelMissingError("Không tìm thấy model. Hãy tải model trước.")
 
     on_log("Đang nạp model...\n")
     model, device_label = _load_model(model_dir, device)
@@ -229,8 +239,6 @@ def transcribe_mp3(
     return collected
 
 
-MODEL_REPO_URL = "https://huggingface.co/Systran/faster-whisper-medium.en/resolve/main"
-MODEL_NAME = "medium.en"
 MODEL_FILES = [
     "model.bin",
     "config.json",
@@ -288,11 +296,11 @@ def _download_file(
 
 def download_model(
     target_dir: Path,
+    base_url: str,
     on_file_start: Callable[[str, int, int], None],
     on_file_bytes: Callable[[int, int], None],
     is_cancelled: Callable[[], bool],
     files: list[str] = MODEL_FILES,
-    base_url: str = MODEL_REPO_URL,
 ) -> None:
     """Download all model files into target_dir. On cancel or error, cleanup
     any partial files (including completed files from this run, since a partial
@@ -338,6 +346,9 @@ class ModelDownloadDialog(tk.Toplevel):
         self,
         parent: tk.Misc,
         target_dir: Path,
+        model_name: str,
+        base_url: str,
+        size_hint: str,
         on_finish: Callable[[bool, str | None], None],
     ) -> None:
         super().__init__(parent)
@@ -349,13 +360,14 @@ class ModelDownloadDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._cancel)
 
         self._target_dir = target_dir
+        self._base_url = base_url
         self._on_finish = on_finish
         self._cancelled = False
         self._closed = False
 
         tk.Label(
             self,
-            text=f"Đang tải model {MODEL_NAME} (~1.5 GB)...",
+            text=f"Đang tải model {model_name} ({size_hint})...",
             bg=PAGE_BG,
             fg=LABEL_FG,
             font=("Segoe UI Semibold", 10),
@@ -424,6 +436,7 @@ class ModelDownloadDialog(tk.Toplevel):
         try:
             download_model(
                 target_dir=self._target_dir,
+                base_url=self._base_url,
                 on_file_start=self._on_file_start,
                 on_file_bytes=self._on_file_bytes,
                 is_cancelled=self._is_cancelled,
@@ -497,6 +510,18 @@ class MP3ToSrtPage(ToolPage):
             width=18,
         ).grid(row=2, column=1, sticky="w", padx=8, pady=4)
 
+        tk.Label(card, text="Model:", bg=CARD_BG, fg=LABEL_FG).grid(
+            row=3, column=0, sticky="w", pady=4)
+        self.model_size_var = tk.StringVar(value=DEFAULT_MODEL_SIZE)
+        ttk.Combobox(
+            card,
+            textvariable=self.model_size_var,
+            values=[f"{name} ({MODEL_SIZE_HINTS[name]})" for name in MODEL_SIZES],
+            state="readonly",
+            width=24,
+        ).grid(row=3, column=1, sticky="w", padx=8, pady=4)
+        self.model_size_var.set(f"{DEFAULT_MODEL_SIZE} ({MODEL_SIZE_HINTS[DEFAULT_MODEL_SIZE]})")
+
         card.columnconfigure(1, weight=1)
 
         bar = tk.Frame(outer, bg=PAGE_BG)
@@ -569,6 +594,13 @@ class MP3ToSrtPage(ToolPage):
         label = self.device_select_var.get()
         return DEVICE_GPU if label == DEVICE_LABELS[DEVICE_GPU] else DEVICE_CPU
 
+    def _selected_model_size(self) -> str:
+        label = self.model_size_var.get()
+        for name in MODEL_SIZES:
+            if label.startswith(name):
+                return name
+        return DEFAULT_MODEL_SIZE
+
     def _cancel(self) -> None:
         if self._busy:
             self._cancel_flag = True
@@ -597,14 +629,16 @@ class MP3ToSrtPage(ToolPage):
             if not messagebox.askyesno("Ghi đè?", f"{out_path} đã tồn tại.\nGhi đè?"):
                 return
 
-        model_dir = find_model_dir("medium.en")
+        model_size = self._selected_model_size()
+        size_hint = MODEL_SIZE_HINTS[model_size]
+        model_dir = find_model_dir(model_size)
         if model_dir is None:
             if not messagebox.askyesno(
                 "Thiếu model",
-                f"Không tìm thấy model {MODEL_NAME} (~1.5 GB).\n\nTải về ngay?",
+                f"Không tìm thấy model {model_size} ({size_hint}).\n\nTải về ngay?",
             ):
                 return
-            target_dir = _exe_dir() / "models" / MODEL_NAME
+            target_dir = _exe_dir() / "models" / model_size
             device = self._selected_device()
 
             def on_download_finish(success: bool, error: str | None) -> None:
@@ -613,7 +647,7 @@ class MP3ToSrtPage(ToolPage):
                         messagebox.showerror("Lỗi tải model", error)
                     self._set_status("Sẵn sàng")
                     return
-                retry_dir = find_model_dir(MODEL_NAME)
+                retry_dir = find_model_dir(model_size)
                 if retry_dir is None:
                     messagebox.showerror("Lỗi", "Tải xong nhưng vẫn không tìm thấy model.")
                     self._set_status("Sẵn sàng")
@@ -621,7 +655,14 @@ class MP3ToSrtPage(ToolPage):
                 self._launch_transcription(src_path, out_path, retry_dir, device)
 
             self._set_status("Đang tải model...")
-            ModelDownloadDialog(self.frame, target_dir, on_download_finish)
+            ModelDownloadDialog(
+                self.frame,
+                target_dir=target_dir,
+                model_name=model_size,
+                base_url=_model_repo_url(model_size),
+                size_hint=size_hint,
+                on_finish=on_download_finish,
+            )
             return
 
         self._launch_transcription(src_path, out_path, model_dir, self._selected_device())
