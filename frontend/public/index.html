@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>API Key Manager</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="login-view" class="container">
+  <div class="card">
+    <h1>Sign in</h1>
+    <p class="muted">Admin access required</p>
+    <form id="login-form">
+      <label>Username</label>
+      <input id="username" type="text" autocomplete="username" required />
+      <label>Password</label>
+      <input id="password" type="password" autocomplete="current-password" required />
+      <button type="submit">Sign in</button>
+      <div id="login-error" class="error"></div>
+    </form>
+  </div>
+</div>
+
+<div id="app-view" class="container hidden">
+  <header class="topbar">
+    <h1>API Keys</h1>
+    <div class="topbar-right">
+      <span class="muted">Signed in as <b id="who"></b></span>
+      <button id="logout" class="ghost">Sign out</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>Create new key</h2>
+    <form id="create-form" class="row">
+      <input id="key-name" type="text" placeholder="Key name (e.g. mobile-app)" />
+      <button type="submit">Create</button>
+      <button type="button" id="generate-btn" class="ghost">Generate</button>
+    </form>
+    <p class="muted">Create needs a name. Generate makes one instantly with an auto-generated name.</p>
+    <div id="new-key" class="new-key hidden">
+      <div id="new-key-label" class="muted">Save this key now. It will not be shown again.</div>
+      <div class="key-row">
+        <code id="new-key-value"></code>
+        <button id="copy-key" class="ghost">Copy</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Existing keys</h2>
+    <div id="list-error" class="error"></div>
+    <table id="keys-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Created</th>
+          <th>Last used</th>
+          <th>ID</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="keys-body"></tbody>
+    </table>
+    <div id="empty" class="muted hidden">No keys yet. Create one above.</div>
+  </section>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

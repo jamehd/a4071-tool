@@ -1,0 +1,14 @@
+*.log
+*.exe
+*.out
+backend/backend
+frontend/frontend
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+pgdata/
+tmp/

@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: a4071_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_secret
+      POSTGRES_DB: apikeys
+    ports:
+      - "4073:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d apikeys"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: a4071_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://app:app_secret@postgres:5432/apikeys?sslmode=disable
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: adminpass
+      JWT_SECRET: change_me_in_prod_super_secret_key
+      PORT: "4071"
+    ports:
+      - "4071:4071"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: a4071_frontend
+    restart: unless-stopped
+    environment:
+      PORT: "4072"
+    ports:
+      - "4072:4072"
+
+volumes:
+  pgdata:
