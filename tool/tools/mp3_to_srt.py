@@ -232,8 +232,7 @@ MODEL_FILES = [
     "model.bin",
     "config.json",
     "tokenizer.json",
-    "vocabulary.json",
-    "preprocessor_config.json",
+    "vocabulary.txt",
 ]
 
 
