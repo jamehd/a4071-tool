@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 import threading
 import tkinter as tk
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -224,6 +226,228 @@ def transcribe_mp3(
     return collected
 
 
+MODEL_REPO_URL = "https://huggingface.co/Systran/faster-whisper-medium.en/resolve/main"
+MODEL_NAME = "medium.en"
+MODEL_FILES = [
+    "model.bin",
+    "config.json",
+    "tokenizer.json",
+    "vocabulary.json",
+    "preprocessor_config.json",
+]
+
+
+class DownloadError(Exception):
+    pass
+
+
+def _download_file(
+    url: str,
+    dest: Path,
+    on_bytes: Callable[[int, int], None],
+    is_cancelled: Callable[[], bool],
+    chunk_size: int = 1024 * 256,
+) -> None:
+    """Stream-download url to dest. Raises CancelledError on cancel,
+    DownloadError on network failure. Writes to dest.tmp then renames."""
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "A4071-Tool/0.1"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            total = int(resp.headers.get("Content-Length") or -1)
+            downloaded = 0
+            with tmp.open("wb") as f:
+                while True:
+                    if is_cancelled():
+                        raise CancelledError()
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    on_bytes(downloaded, total)
+        tmp.replace(dest)
+    except CancelledError:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    except (urllib.error.URLError, OSError) as exc:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise DownloadError(f"Tải {url} thất bại: {exc}") from exc
+
+
+def download_model(
+    target_dir: Path,
+    on_file_start: Callable[[str, int, int], None],
+    on_file_bytes: Callable[[int, int], None],
+    is_cancelled: Callable[[], bool],
+    files: list[str] = MODEL_FILES,
+    base_url: str = MODEL_REPO_URL,
+) -> None:
+    """Download all model files into target_dir. On cancel or error, cleanup
+    any partial files (including completed files from this run, since a partial
+    install is unusable). Raises CancelledError or DownloadError."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    completed: list[Path] = []
+    try:
+        for idx, filename in enumerate(files, 1):
+            on_file_start(filename, idx, len(files))
+            dest = target_dir / filename
+            _download_file(
+                url=f"{base_url}/{filename}",
+                dest=dest,
+                on_bytes=on_file_bytes,
+                is_cancelled=is_cancelled,
+            )
+            completed.append(dest)
+    except (CancelledError, DownloadError):
+        for path in completed:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def _fmt_size(n: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    f = float(n)
+    for u in units:
+        if f < 1024.0 or u == units[-1]:
+            return f"{f:.1f} {u}" if u != "B" else f"{int(f)} {u}"
+        f /= 1024.0
+    return f"{n} B"
+
+
+class ModelDownloadDialog(tk.Toplevel):
+    """Modal progress dialog for model download. Self-runs the download
+    in a worker thread, calls on_finish(success: bool, error: str | None)
+    when the dialog closes."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        target_dir: Path,
+        on_finish: Callable[[bool, str | None], None],
+    ) -> None:
+        super().__init__(parent)
+        self.title("Tải model")
+        self.resizable(False, False)
+        self.configure(bg=PAGE_BG, padx=20, pady=16)
+        self.transient(parent.winfo_toplevel())
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        self._target_dir = target_dir
+        self._on_finish = on_finish
+        self._cancelled = False
+        self._closed = False
+
+        tk.Label(
+            self,
+            text=f"Đang tải model {MODEL_NAME} (~1.5 GB)...",
+            bg=PAGE_BG,
+            fg=LABEL_FG,
+            font=("Segoe UI Semibold", 10),
+        ).pack(anchor="w")
+
+        self.file_var = tk.StringVar(value="Chuẩn bị...")
+        tk.Label(
+            self,
+            textvariable=self.file_var,
+            bg=PAGE_BG,
+            fg=MUTED_FG,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(8, 4))
+
+        self.progress = ttk.Progressbar(self, length=420, mode="determinate", maximum=100.0)
+        self.progress.pack(fill="x")
+
+        self.bytes_var = tk.StringVar(value="")
+        tk.Label(
+            self,
+            textvariable=self.bytes_var,
+            bg=PAGE_BG,
+            fg=MUTED_FG,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(4, 8))
+
+        self.cancel_btn = ttk.Button(self, text="Hủy", command=self._cancel)
+        self.cancel_btn.pack(anchor="e")
+
+        self.update_idletasks()
+        parent_root = parent.winfo_toplevel()
+        px = parent_root.winfo_rootx() + (parent_root.winfo_width() - self.winfo_width()) // 2
+        py = parent_root.winfo_rooty() + (parent_root.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{max(0, px)}+{max(0, py)}")
+
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _cancel(self) -> None:
+        if not self._cancelled and not self._closed:
+            self._cancelled = True
+            self.cancel_btn.configure(state="disabled", text="Đang hủy...")
+
+    def _on_file_start(self, filename: str, idx: int, total_count: int) -> None:
+        def do() -> None:
+            self.file_var.set(f"({idx}/{total_count}) {filename}")
+            self.progress.configure(value=0.0)
+            self.bytes_var.set("")
+        self.after(0, do)
+
+    def _on_file_bytes(self, downloaded: int, total: int) -> None:
+        def do() -> None:
+            if total > 0:
+                pct = (downloaded / total) * 100.0
+                self.progress.configure(value=min(100.0, pct))
+                self.bytes_var.set(f"{_fmt_size(downloaded)} / {_fmt_size(total)}")
+            else:
+                self.bytes_var.set(f"{_fmt_size(downloaded)}")
+        self.after(0, do)
+
+    def _is_cancelled(self) -> bool:
+        return self._cancelled
+
+    def _run(self) -> None:
+        error: str | None = None
+        success = False
+        try:
+            download_model(
+                target_dir=self._target_dir,
+                on_file_start=self._on_file_start,
+                on_file_bytes=self._on_file_bytes,
+                is_cancelled=self._is_cancelled,
+            )
+            success = True
+        except CancelledError:
+            error = None
+        except DownloadError as exc:
+            error = str(exc)
+        except Exception as exc:
+            error = f"Lỗi không xác định: {exc}"
+        finally:
+            self.after(0, lambda: self._close(success, error))
+
+    def _close(self, success: bool, error: str | None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+        self._on_finish(success, error)
+
+
 class MP3ToSrtPage(ToolPage):
     name = "MP3 to SRT"
     description = "Phiên âm MP3 thành phụ đề SRT cho video caption"
@@ -363,14 +587,33 @@ class MP3ToSrtPage(ToolPage):
 
         model_dir = find_model_dir("medium.en")
         if model_dir is None:
-            messagebox.showerror(
+            if not messagebox.askyesno(
                 "Thiếu model",
-                "Không tìm thấy model medium.en.\n\n"
-                "Tải tại: https://huggingface.co/Systran/faster-whisper-medium.en\n"
-                "Giải nén vào thư mục models/medium.en/ cạnh A4071-Tool.exe.",
-            )
+                f"Không tìm thấy model {MODEL_NAME} (~1.5 GB).\n\nTải về ngay?",
+            ):
+                return
+            target_dir = _exe_dir() / "models" / MODEL_NAME
+
+            def on_download_finish(success: bool, error: str | None) -> None:
+                if not success:
+                    if error:
+                        messagebox.showerror("Lỗi tải model", error)
+                    self._set_status("Sẵn sàng")
+                    return
+                retry_dir = find_model_dir(MODEL_NAME)
+                if retry_dir is None:
+                    messagebox.showerror("Lỗi", "Tải xong nhưng vẫn không tìm thấy model.")
+                    self._set_status("Sẵn sàng")
+                    return
+                self._launch_transcription(src_path, out_path, retry_dir)
+
+            self._set_status("Đang tải model...")
+            ModelDownloadDialog(self.frame, target_dir, on_download_finish)
             return
 
+        self._launch_transcription(src_path, out_path, model_dir)
+
+    def _launch_transcription(self, src_path: Path, out_path: Path, model_dir: Path) -> None:
         self._busy = True
         self._cancel_flag = False
         self.start_btn.configure(state="disabled")
