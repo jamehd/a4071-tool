@@ -19,6 +19,7 @@ from tools.auth import (
 from tools.base import ToolPage
 from tools.mp3_merger import MP3MergerPage
 from tools.mp3_to_srt import MP3ToSrtPage
+from tools.updater import UpdateAvailable, UpdateDialog, check_update
 
 
 APP_TITLE = "A4071-Tool"
@@ -92,6 +93,7 @@ class A4071App(tk.Tk):
         self._pages: dict[str, ToolPage] = {}
         self._sidebar_items: dict[str, SidebarItem] = {}
         self._active_key: str | None = None
+        self._api_key: str | None = None
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(0, self._bootstrap)
@@ -120,7 +122,7 @@ class A4071App(tk.Tk):
         if isinstance(result, VerifyOk):
             if result.name and result.name != cfg.get("name"):
                 save_config(cfg["api_key"], result.name)
-            self._show_main(result.name or cfg.get("name", ""))
+            self._show_main(result.name or cfg.get("name", ""), cfg["api_key"])
         elif isinstance(result, VerifyInvalid):
             clear_config()
             self._show_login(initial_error="Key đã bị thu hồi. Đăng nhập lại.")
@@ -166,9 +168,10 @@ class A4071App(tk.Tk):
 
     def _on_login_success(self, api_key: str, name: str) -> None:
         save_config(api_key, name)
-        self._show_main(name)
+        self._show_main(name, api_key)
 
-    def _show_main(self, name: str) -> None:
+    def _show_main(self, name: str, api_key: str) -> None:
+        self._api_key = api_key
         self._set_window(1020, 660, resizable=True)
         screen = tk.Frame(self, bg=CONTENT_BG)
 
@@ -229,6 +232,30 @@ class A4071App(tk.Tk):
         self._register_tools()
         if self._pages:
             self.show_page(next(iter(self._pages)))
+        self.after(500, self._kick_update_check)
+
+    def _kick_update_check(self) -> None:
+        if not self._api_key:
+            return
+        key = self._api_key
+
+        def worker() -> None:
+            result = check_update(key, APP_VERSION)
+            self.after(0, lambda: self._handle_check_result(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_check_result(self, result) -> None:
+        if not isinstance(result, UpdateAvailable):
+            return
+        current_exe = Path(sys.executable)
+        UpdateDialog(
+            self,
+            info=result,
+            api_key=self._api_key or "",
+            current_version=APP_VERSION,
+            current_exe=current_exe,
+        )
 
     def _on_logout(self) -> None:
         clear_config()
