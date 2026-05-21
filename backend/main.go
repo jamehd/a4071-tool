@@ -90,6 +90,7 @@ func main() {
 	r.With(app.apiKeyAuth).Get("/api/verify", app.verifyKey)
 	r.With(app.apiKeyAuth).Get("/api/me", app.verifyKey)
 	r.With(app.apiKeyAuth).Get("/api/version", app.handleVersion)
+	r.With(app.apiKeyAuth).Get("/api/download", app.handleDownload)
 
 	port := getenv("PORT", "4071")
 	log.Printf("listening on :%s", port)
