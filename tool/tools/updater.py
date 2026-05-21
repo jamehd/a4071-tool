@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -160,3 +161,54 @@ def download_update(
 
     os.replace(part, final)
     return final
+
+
+_UPDATER_BAT_TEMPLATE = r"""@echo off
+setlocal
+:wait
+tasklist /FI "PID eq {PID}" 2>nul | find "{PID}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto wait
+)
+move /Y "{NEW_EXE}" "{CURRENT_EXE}" >nul
+if errorlevel 1 (
+    exit /b 1
+)
+start "" "{CURRENT_EXE}"
+(goto) 2>nul & del "%~f0"
+"""
+
+
+def _render_updater_bat(pid: int, new_exe: str, current_exe: str) -> str:
+    return (
+        _UPDATER_BAT_TEMPLATE
+        .replace("{PID}", str(pid))
+        .replace("{NEW_EXE}", new_exe)
+        .replace("{CURRENT_EXE}", current_exe)
+    )
+
+
+def apply_update_and_exit(new_exe: Path, current_exe: Path) -> None:
+    pid = os.getpid()
+    bat_path = Path(tempfile.gettempdir()) / f"a4071-update-{pid}.bat"
+    bat_path.write_text(
+        _render_updater_bat(pid, str(new_exe), str(current_exe)),
+        encoding="ascii",
+    )
+
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = (
+            subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        )
+
+    subprocess.Popen(
+        ["cmd", "/c", str(bat_path)],
+        creationflags=creationflags,
+        close_fds=True,
+        cwd=str(bat_path.parent),
+    )
+    sys.exit(0)
