@@ -79,6 +79,23 @@ function showApp() {
   $("app-view").classList.remove("hidden");
   $("who").textContent = state.user || "admin";
   loadKeys();
+  loadCurrentRelease();
+}
+
+async function loadCurrentRelease() {
+  const el = $("current-release");
+  try {
+    const m = await api("/admin/release");
+    const sizeMB = (m.size / 1024 / 1024).toFixed(1);
+    const uploaded = fmtDate(m.uploaded_at);
+    el.innerHTML = `Current: <b>v${escapeHtml(m.version)}</b> &middot; ${sizeMB} MB &middot; uploaded ${escapeHtml(uploaded)}`;
+  } catch (err) {
+    if (err.message === "no release") {
+      el.textContent = "No release published yet.";
+    } else {
+      el.textContent = "Could not load current version.";
+    }
+  }
 }
 
 $("login-form").addEventListener("submit", async (e) => {
@@ -240,6 +257,7 @@ $("release-form").addEventListener("submit", async (e) => {
     $("release-version").value = "";
     $("release-notes").value = "";
     fileInput.value = "";
+    loadCurrentRelease();
   } catch (err) {
     errEl.textContent = err.message;
     progressEl.classList.add("hidden");

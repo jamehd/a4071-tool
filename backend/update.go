@@ -75,6 +75,18 @@ func (a *App) handleVersion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleGetRelease(w http.ResponseWriter, r *http.Request) {
+	a.update.mu.RLock()
+	defer a.update.mu.RUnlock()
+
+	m, err := a.update.readManifest()
+	if err != nil || m.Version == "" {
+		writeJSON(w, 404, map[string]string{"error": "no release"})
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
 func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
 	a.update.mu.RLock()
 	m, err := a.update.readManifest()

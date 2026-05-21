@@ -87,6 +87,7 @@ func main() {
 		r.Delete("/{id}", app.deleteKey)
 	})
 
+	r.With(app.adminAuth).Get("/api/admin/release", app.handleGetRelease)
 	r.With(app.adminAuth).Post("/api/admin/release", app.handleUploadRelease)
 
 	r.With(app.apiKeyAuth).Get("/api/verify", app.verifyKey)
