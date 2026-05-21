@@ -24,3 +24,6 @@ venv/
 # PyInstaller
 tool/build/
 tool/dist/
+
+# Downloaded faster-whisper models
+tool/models/
