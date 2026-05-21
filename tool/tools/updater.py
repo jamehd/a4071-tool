@@ -390,10 +390,13 @@ class UpdateDialog(tk.Toplevel):
 
     def _on_progress(self, done: int, total: int) -> None:
         def apply() -> None:
-            self._progress.configure(maximum=max(1, total), value=done)
-            mb_done = done / (1024 * 1024)
-            mb_total = total / (1024 * 1024)
-            self._status.configure(text=f"{mb_done:.1f} / {mb_total:.1f} MB")
+            try:
+                self._progress.configure(maximum=max(1, total), value=done)
+                mb_done = done / (1024 * 1024)
+                mb_total = total / (1024 * 1024)
+                self._status.configure(text=f"{mb_done:.1f} / {mb_total:.1f} MB")
+            except tk.TclError:
+                pass
         try:
             self.after(0, apply)
         except tk.TclError:
@@ -414,5 +417,8 @@ class UpdateDialog(tk.Toplevel):
             try:
                 apply_update_and_exit(path, self._current_exe)
             except OSError:
-                self._show_error("Không khởi động được trình cập nhật.")
+                try:
+                    self._show_error("Không khởi động được trình cập nhật.")
+                except tk.TclError:
+                    pass
         self.after(0, apply)
