@@ -65,6 +65,26 @@
     </table>
     <div id="empty" class="muted hidden">No keys yet. Create one above.</div>
   </section>
+
+  <section class="card">
+    <h2>Publish update</h2>
+    <p class="muted">Upload a new A4071-Tool.exe build. Users will see the update prompt on next launch.</p>
+    <form id="release-form">
+      <label for="release-version">Version</label>
+      <input id="release-version" type="text" placeholder="0.2.0" required />
+
+      <label for="release-notes">Release notes</label>
+      <textarea id="release-notes" rows="4" placeholder="- Sửa lỗi X&#10;- Cập nhật Y"></textarea>
+
+      <label for="release-file">A4071-Tool.exe</label>
+      <input id="release-file" type="file" accept=".exe" required />
+
+      <button type="submit" id="release-submit">Publish</button>
+      <div id="release-progress" class="muted hidden"></div>
+      <div id="release-status" class="release-status hidden"></div>
+      <div id="release-error" class="error"></div>
+    </form>
+  </section>
 </div>
 
 <script src="/app.js"></script>

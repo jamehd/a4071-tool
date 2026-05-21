@@ -34,6 +34,41 @@ async function api(path, opts = {}) {
   return data;
 }
 
+async function apiForm(path, formData) {
+  const headers = {};
+  if (state.token) headers["Authorization"] = "Bearer " + state.token;
+  const res = await fetch(API + path, { method: "POST", headers, body: formData });
+  if (res.status === 401) {
+    setToken(null, null);
+    showLogin();
+    throw new Error("unauthorized");
+  }
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new Error(data.error || "request failed");
+  return data;
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  try {
+    if (!document.execCommand("copy")) throw new Error("execCommand returned false");
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
 function showLogin() {
   $("login-view").classList.remove("hidden");
   $("app-view").classList.add("hidden");
@@ -106,10 +141,13 @@ function showNewKey(value, label) {
 $("copy-key").addEventListener("click", async () => {
   const val = $("new-key-value").textContent;
   try {
-    await navigator.clipboard.writeText(val);
+    await copyToClipboard(val);
     $("copy-key").textContent = "Copied";
     setTimeout(() => { $("copy-key").textContent = "Copy"; }, 1500);
-  } catch {}
+  } catch (err) {
+    $("copy-key").textContent = "Copy failed";
+    setTimeout(() => { $("copy-key").textContent = "Copy"; }, 2000);
+  }
 });
 
 async function loadKeys() {
@@ -164,6 +202,52 @@ async function deleteKey(id, name) {
     alert("Delete failed: " + err.message);
   }
 }
+
+$("release-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const version = $("release-version").value.trim();
+  const notes = $("release-notes").value;
+  const fileInput = $("release-file");
+  const file = fileInput.files[0];
+  const errEl = $("release-error");
+  const progressEl = $("release-progress");
+  const statusEl = $("release-status");
+  const btn = $("release-submit");
+
+  errEl.textContent = "";
+  statusEl.classList.add("hidden");
+  if (!version) { errEl.textContent = "Version required"; return; }
+  if (!file) { errEl.textContent = "Choose an .exe file"; return; }
+
+  btn.disabled = true;
+  btn.textContent = "Uploading...";
+  progressEl.classList.remove("hidden");
+  progressEl.textContent = `Uploading ${(file.size / 1024 / 1024).toFixed(1)} MB...`;
+
+  try {
+    const fd = new FormData();
+    fd.append("version", version);
+    fd.append("notes", notes);
+    fd.append("file", file);
+    const resp = await apiForm("/admin/release", fd);
+    progressEl.classList.add("hidden");
+    statusEl.classList.remove("hidden");
+    statusEl.innerHTML = `
+      <div><b>Published v${escapeHtml(resp.version)}</b></div>
+      <div class="muted">sha256: <code>${escapeHtml(resp.sha256)}</code></div>
+      <div class="muted">size: ${(resp.size / 1024 / 1024).toFixed(1)} MB</div>
+    `;
+    $("release-version").value = "";
+    $("release-notes").value = "";
+    fileInput.value = "";
+  } catch (err) {
+    errEl.textContent = err.message;
+    progressEl.classList.add("hidden");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Publish";
+  }
+});
 
 function fmtDate(iso) {
   const d = new Date(iso);
