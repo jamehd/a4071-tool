@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import socket
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Union
+from pathlib import Path
+from typing import Callable, Union
 
 
 API_BASE = "http://a4071-tool.j4m.dev:4071"
@@ -107,3 +111,52 @@ def check_update(api_key: str, current_version: str) -> CheckResult:
         size=size,
         download_url=f"{API_BASE}{DOWNLOAD_PATH}",
     )
+
+
+def download_update(
+    info: UpdateAvailable,
+    api_key: str,
+    on_progress: Callable[[int, int], None],
+) -> Path:
+    tmp_dir = Path(tempfile.gettempdir())
+    part = tmp_dir / "A4071-Tool-update.exe.part"
+    final = tmp_dir / "A4071-Tool-update.exe"
+    part.unlink(missing_ok=True)
+    final.unlink(missing_ok=True)
+
+    req = urllib.request.Request(
+        info.download_url, headers={"X-API-Key": api_key}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp:
+            if resp.status != 200:
+                raise UpdateError(f"Server trả về mã {resp.status}.")
+            total = int(resp.headers.get("Content-Length") or info.size)
+            h = hashlib.sha256()
+            done = 0
+            on_progress(0, total)
+            with open(part, "wb") as f:
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    h.update(chunk)
+                    done += len(chunk)
+                    on_progress(done, total)
+    except urllib.error.HTTPError as exc:
+        part.unlink(missing_ok=True)
+        raise UpdateError(f"Tải bản cập nhật thất bại ({exc.code}).") from exc
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as exc:
+        part.unlink(missing_ok=True)
+        raise UpdateError("Tải bản cập nhật thất bại. Kiểm tra kết nối.") from exc
+    except OSError as exc:
+        part.unlink(missing_ok=True)
+        raise UpdateError("Không ghi được file tạm.") from exc
+
+    if h.hexdigest().lower() != info.sha256.lower():
+        part.unlink(missing_ok=True)
+        raise UpdateError("File tải về bị lỗi. Vui lòng thử lại.")
+
+    os.replace(part, final)
+    return final
