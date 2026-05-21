@@ -164,6 +164,7 @@ def download_update(
 
 
 _UPDATER_BAT_TEMPLATE = r"""@echo off
+chcp 65001 >nul
 setlocal
 :wait
 tasklist /FI "PID eq {PID}" 2>nul | find "{PID}" >nul
@@ -171,10 +172,18 @@ if not errorlevel 1 (
     timeout /t 1 /nobreak >nul
     goto wait
 )
+set /a tries=0
+:retry
 move /Y "{NEW_EXE}" "{CURRENT_EXE}" >nul
-if errorlevel 1 (
-    exit /b 1
+if not errorlevel 1 goto launch
+set /a tries+=1
+if %tries% lss 10 (
+    timeout /t 1 /nobreak >nul
+    goto retry
 )
+del "%~f0"
+exit /b 1
+:launch
 start "" "{CURRENT_EXE}"
 (goto) 2>nul & del "%~f0"
 """
@@ -194,7 +203,7 @@ def apply_update_and_exit(new_exe: Path, current_exe: Path) -> None:
     bat_path = Path(tempfile.gettempdir()) / f"a4071-update-{pid}.bat"
     bat_path.write_text(
         _render_updater_bat(pid, str(new_exe), str(current_exe)),
-        encoding="ascii",
+        encoding="utf-8",
     )
 
     creationflags = 0
