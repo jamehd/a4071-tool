@@ -27,6 +27,11 @@ services:
       ADMIN_PASSWORD: adminpass
       JWT_SECRET: change_me_in_prod_super_secret_key
       PORT: "4071"
+      UPDATE_DIR: /srv/updates
+      UPDATE_VERSION: ""
+      UPDATE_NOTES: ""
+    volumes:
+      - ./updates:/srv/updates:ro
     ports:
       - "4071:4071"
     depends_on:

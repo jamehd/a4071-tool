@@ -27,3 +27,6 @@ tool/dist/
 
 # Downloaded faster-whisper models
 tool/models/
+
+# Auto-update release drops (sha256 sidecar of UPDATE_DIR exe)
+/updates/A4071-Tool.exe.sha256
