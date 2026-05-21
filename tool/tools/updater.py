@@ -178,7 +178,7 @@ if not errorlevel 1 (
 set /a tries=0
 :retry
 move /Y "{NEW_EXE}" "{CURRENT_EXE}" >nul
-if not errorlevel 1 goto launch
+if not errorlevel 1 goto done
 set /a tries+=1
 if %tries% lss 10 (
     timeout /t 1 /nobreak >nul
@@ -186,19 +186,16 @@ if %tries% lss 10 (
 )
 del "%~f0"
 exit /b 1
-:launch
-timeout /t 2 /nobreak >nul
-start "" /D "{CURRENT_EXE_DIR}" "{CURRENT_EXE}"
+:done
 (goto) 2>nul & del "%~f0"
 """
 
 
-def _render_updater_bat(pid: int, new_exe: str, current_exe: str, current_exe_dir: str) -> str:
+def _render_updater_bat(pid: int, new_exe: str, current_exe: str) -> str:
     return (
         _UPDATER_BAT_TEMPLATE
         .replace("{PID}", str(pid))
         .replace("{NEW_EXE}", new_exe)
-        .replace("{CURRENT_EXE_DIR}", current_exe_dir)
         .replace("{CURRENT_EXE}", current_exe)
     )
 
@@ -207,12 +204,7 @@ def apply_update_and_exit(new_exe: Path, current_exe: Path) -> None:
     pid = os.getpid()
     bat_path = Path(tempfile.gettempdir()) / f"a4071-update-{pid}.bat"
     bat_path.write_text(
-        _render_updater_bat(
-            pid,
-            str(new_exe),
-            str(current_exe),
-            str(current_exe.parent),
-        ),
+        _render_updater_bat(pid, str(new_exe), str(current_exe)),
         encoding="utf-8",
     )
 
@@ -419,12 +411,42 @@ class UpdateDialog(tk.Toplevel):
             self.after(0, lambda: self._show_error("Đã có lỗi không xác định."))
             return
 
-        def apply() -> None:
+        self.after(0, lambda: self._show_ready(path))
+
+    def _show_ready(self, new_exe: Path) -> None:
+        self._closeable = True
+        self._clear_body()
+        tk.Label(
+            self._body,
+            text="Sẵn sàng cập nhật",
+            bg=_DIALOG_BG, fg=_HEADER_FG,
+            font=("Segoe UI Semibold", 13),
+            anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            self._body,
+            text=(
+                f"Đã tải xong bản {self._info.latest}.\n"
+                "Nhấn 'Hoàn tất' để đóng app và áp dụng cập nhật.\n"
+                "Sau đó mở lại A4071-Tool để dùng bản mới."
+            ),
+            bg=_DIALOG_BG, fg=_HEADER_FG,
+            font=("Segoe UI", 10), anchor="w", justify="left",
+            wraplength=420,
+        ).pack(fill="x", pady=(8, 16))
+
+        def finish() -> None:
             try:
-                apply_update_and_exit(path, self._current_exe)
+                apply_update_and_exit(new_exe, self._current_exe)
             except OSError:
                 try:
-                    self._show_error("Không khởi động được trình cập nhật.")
+                    self._show_error("Không ghi được trình cập nhật.")
                 except tk.TclError:
                     pass
-        self.after(0, apply)
+
+        tk.Button(
+            self._body, text="Hoàn tất", bg=_PRIMARY_BG, fg=_PRIMARY_FG,
+            relief="flat", cursor="hand2",
+            font=("Segoe UI Semibold", 10), padx=14, pady=6,
+            command=finish,
+        ).pack(side="right")

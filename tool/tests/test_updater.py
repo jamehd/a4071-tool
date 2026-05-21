@@ -47,27 +47,23 @@ class RenderUpdaterBatTests(unittest.TestCase):
             pid=4242,
             new_exe=r"C:\Users\foo\AppData\Local\Temp\A4071-Tool-update.exe",
             current_exe=r"C:\Apps\A4071-Tool\A4071-Tool.exe",
-            current_exe_dir=r"C:\Apps\A4071-Tool",
         )
         self.assertIn('PID eq 4242', script)
         self.assertIn(r'"C:\Users\foo\AppData\Local\Temp\A4071-Tool-update.exe"', script)
         self.assertIn(r'"C:\Apps\A4071-Tool\A4071-Tool.exe"', script)
-        self.assertIn(r'/D "C:\Apps\A4071-Tool"', script)
         self.assertIn("move /Y", script)
-        self.assertIn("start \"\"", script)
         self.assertIn("del \"%~f0\"", script)
+        self.assertNotIn("start \"\"", script)
 
     def test_no_extra_quotes_or_braces(self) -> None:
         script = _render_updater_bat(
             pid=1,
             new_exe=r"C:\a.exe",
             current_exe=r"C:\b.exe",
-            current_exe_dir="C:\\",
         )
         self.assertNotIn("{PID}", script)
         self.assertNotIn("{NEW_EXE}", script)
         self.assertNotIn("{CURRENT_EXE}", script)
-        self.assertNotIn("{CURRENT_EXE_DIR}", script)
 
 
 if __name__ == "__main__":
