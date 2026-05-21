@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -15,19 +16,20 @@ import (
 
 const (
 	releaseExeName      = "A4071-Tool.exe"
-	releaseShaName      = "A4071-Tool.exe.sha256"
 	releaseManifestName = "release.json"
 	maxUploadBytes      = 200 * 1024 * 1024
 )
 
 type updateConfig struct {
 	dir string
-	mu  sync.Mutex
+	mu  sync.RWMutex
 }
 
 type releaseManifest struct {
 	Version    string    `json:"version"`
 	Notes      string    `json:"notes"`
+	Sha256     string    `json:"sha256"`
+	Size       int64     `json:"size"`
 	UploadedAt time.Time `json:"uploaded_at"`
 }
 
@@ -39,7 +41,6 @@ func loadUpdateConfig() updateConfig {
 
 func (c *updateConfig) manifestPath() string { return filepath.Join(c.dir, releaseManifestName) }
 func (c *updateConfig) exePath() string      { return filepath.Join(c.dir, releaseExeName) }
-func (c *updateConfig) shaPath() string      { return filepath.Join(c.dir, releaseShaName) }
 
 func (c *updateConfig) readManifest() (releaseManifest, error) {
 	var m releaseManifest
@@ -54,46 +55,49 @@ func (c *updateConfig) readManifest() (releaseManifest, error) {
 }
 
 func (a *App) handleVersion(w http.ResponseWriter, r *http.Request) {
+	a.update.mu.RLock()
+	defer a.update.mu.RUnlock()
+
 	m, err := a.update.readManifest()
 	if err != nil || m.Version == "" {
 		writeJSON(w, 503, map[string]string{"error": "no release available"})
 		return
 	}
-	st, err := os.Stat(a.update.exePath())
-	if err != nil {
-		writeJSON(w, 503, map[string]string{"error": "no release available"})
-		return
-	}
-	shaBytes, err := os.ReadFile(a.update.shaPath())
-	if err != nil {
+	if _, err := os.Stat(a.update.exePath()); err != nil {
 		writeJSON(w, 503, map[string]string{"error": "no release available"})
 		return
 	}
 	writeJSON(w, 200, map[string]any{
 		"latest": m.Version,
 		"notes":  m.Notes,
-		"sha256": strings.ToLower(strings.TrimSpace(string(shaBytes))),
-		"size":   st.Size(),
+		"sha256": m.Sha256,
+		"size":   m.Size,
 	})
 }
 
 func (a *App) handleDownload(w http.ResponseWriter, r *http.Request) {
+	a.update.mu.RLock()
 	m, err := a.update.readManifest()
 	if err != nil || m.Version == "" {
+		a.update.mu.RUnlock()
 		writeJSON(w, 503, map[string]string{"error": "no release available"})
 		return
 	}
 	f, err := os.Open(a.update.exePath())
 	if err != nil {
+		a.update.mu.RUnlock()
 		writeJSON(w, 503, map[string]string{"error": "no release available"})
 		return
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
+		a.update.mu.RUnlock()
 		writeJSON(w, 500, map[string]string{"error": "stat failed"})
 		return
 	}
+	a.update.mu.RUnlock()
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="A4071-Tool.exe"`)
 	http.ServeContent(w, r, releaseExeName, st.ModTime(), f)
@@ -105,9 +109,19 @@ func (a *App) handleUploadRelease(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, 413, map[string]string{"error": "file too large"})
+			return
+		}
 		writeJSON(w, 400, map[string]string{"error": "invalid multipart: " + err.Error()})
 		return
 	}
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
 
 	version := strings.TrimSpace(r.FormValue("version"))
 	if version == "" {
@@ -135,7 +149,8 @@ func (a *App) handleUploadRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(out, h), file); err != nil {
+	written, err := io.Copy(io.MultiWriter(out, h), file)
+	if err != nil {
 		out.Close()
 		os.Remove(partPath)
 		writeJSON(w, 500, map[string]string{"error": "write failed: " + err.Error()})
@@ -154,14 +169,11 @@ func (a *App) handleUploadRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.WriteFile(a.update.shaPath(), []byte(sum), 0o644); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "write sha256 failed: " + err.Error()})
-		return
-	}
-
 	manifest := releaseManifest{
 		Version:    version,
 		Notes:      notes,
+		Sha256:     sum,
+		Size:       written,
 		UploadedAt: time.Now().UTC(),
 	}
 	manifestData, err := json.Marshal(manifest)
@@ -169,16 +181,22 @@ func (a *App) handleUploadRelease(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "marshal manifest failed"})
 		return
 	}
-	if err := os.WriteFile(a.update.manifestPath(), manifestData, 0o644); err != nil {
-		writeJSON(w, 500, map[string]string{"error": "write manifest failed: " + err.Error()})
+
+	manifestPart := a.update.manifestPath() + ".part"
+	if err := os.WriteFile(manifestPart, manifestData, 0o644); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "write manifest part failed: " + err.Error()})
+		return
+	}
+	if err := os.Rename(manifestPart, a.update.manifestPath()); err != nil {
+		os.Remove(manifestPart)
+		writeJSON(w, 500, map[string]string{"error": "rename manifest failed: " + err.Error()})
 		return
 	}
 
-	st, _ := os.Stat(a.update.exePath())
 	writeJSON(w, 200, map[string]any{
 		"status":  "ok",
 		"version": version,
 		"sha256":  sum,
-		"size":    st.Size(),
+		"size":    written,
 	})
 }
