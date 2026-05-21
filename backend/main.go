@@ -22,10 +22,11 @@ import (
 )
 
 type App struct {
-	db            *pgxpool.Pool
-	adminUser     string
-	adminPass     string
-	jwtSecret     []byte
+	db        *pgxpool.Pool
+	adminUser string
+	adminPass string
+	jwtSecret []byte
+	update    updateConfig
 }
 
 type APIKey struct {
@@ -58,6 +59,7 @@ func main() {
 		adminUser: getenv("ADMIN_USERNAME", "admin"),
 		adminPass: getenv("ADMIN_PASSWORD", "adminpass"),
 		jwtSecret: []byte(getenv("JWT_SECRET", "dev_secret")),
+		update:    loadUpdateConfig(),
 	}
 
 	r := chi.NewRouter()
@@ -87,6 +89,7 @@ func main() {
 
 	r.With(app.apiKeyAuth).Get("/api/verify", app.verifyKey)
 	r.With(app.apiKeyAuth).Get("/api/me", app.verifyKey)
+	r.With(app.apiKeyAuth).Get("/api/version", app.handleVersion)
 
 	port := getenv("PORT", "4071")
 	log.Printf("listening on :%s", port)
