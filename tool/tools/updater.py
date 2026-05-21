@@ -212,8 +212,7 @@ def apply_update_and_exit(new_exe: Path, current_exe: Path) -> None:
     creationflags = 0
     if sys.platform == "win32":
         creationflags = (
-            subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
-            | subprocess.CREATE_NEW_PROCESS_GROUP
+            subprocess.CREATE_NEW_PROCESS_GROUP
             | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
         )
 
@@ -223,7 +222,7 @@ def apply_update_and_exit(new_exe: Path, current_exe: Path) -> None:
         close_fds=True,
         cwd=str(bat_path.parent),
     )
-    sys.exit(0)
+    os._exit(0)
 
 
 _DIALOG_BG = "#f8fafc"
