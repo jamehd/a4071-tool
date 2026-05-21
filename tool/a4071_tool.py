@@ -23,7 +23,7 @@ from tools.updater import UpdateAvailable, UpdateDialog, check_update
 
 
 APP_TITLE = "A4071-Tool"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.7.0"
 
 SIDEBAR_BG = "#1f2937"
 SIDEBAR_FG = "#e5e7eb"
