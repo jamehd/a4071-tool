@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
 from .base import ToolPage
+from .progress import ProgressPanel
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -44,6 +45,84 @@ def find_ffmpeg() -> Optional[str]:
             return str(c)
     found = shutil.which("ffmpeg")
     return found
+
+
+def find_ffprobe() -> Optional[str]:
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "ffprobe.exe")
+    candidates.append(app_root() / "ffprobe.exe")
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    found = shutil.which("ffprobe")
+    return found
+
+
+_MPEG1_L3_BITRATES_KBPS = [
+    32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+]
+
+
+def _parse_mp3_first_frame_bitrate_bps(data: bytes) -> Optional[int]:
+    """Return the CBR bitrate in bits/sec, or None if not a recognizable
+    MPEG-1 Layer III frame. Skips a leading ID3v2 tag if present."""
+    offset = 0
+    if len(data) >= 10 and data[:3] == b"ID3":
+        size = (
+            ((data[6] & 0x7F) << 21)
+            | ((data[7] & 0x7F) << 14)
+            | ((data[8] & 0x7F) << 7)
+            | (data[9] & 0x7F)
+        )
+        offset = 10 + size
+    while offset + 4 <= len(data):
+        b0 = data[offset]
+        b1 = data[offset + 1]
+        b2 = data[offset + 2]
+        if b0 == 0xFF and (b1 & 0xE0) == 0xE0:
+            version = (b1 >> 3) & 0x3   # 0x3 = MPEG-1
+            layer = (b1 >> 1) & 0x3     # 0x1 = Layer III
+            bitrate_idx = (b2 >> 4) & 0xF
+            if version == 0x3 and layer == 0x1 and 1 <= bitrate_idx <= 14:
+                return _MPEG1_L3_BITRATES_KBPS[bitrate_idx - 1] * 1000
+        offset += 1
+    return None
+
+
+def mp3_duration(path: Path, ffprobe: Optional[str]) -> Optional[float]:
+    """Best-effort duration in seconds. Tries ffprobe first if available,
+    then falls back to CBR estimation from the first MP3 frame header.
+    Returns None on any failure."""
+    if ffprobe:
+        try:
+            out = subprocess.check_output(
+                [
+                    ffprobe, "-v", "error", "-i", str(path),
+                    "-show_entries", "format=duration",
+                    "-of", "csv=p=0",
+                ],
+                stderr=subprocess.DEVNULL,
+                creationflags=CREATE_NO_WINDOW,
+                timeout=10,
+            ).decode("ascii", errors="ignore").strip()
+            if out:
+                d = float(out)
+                if d > 0:
+                    return d
+        except (subprocess.SubprocessError, ValueError, OSError):
+            pass
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return None
+    bps = _parse_mp3_first_frame_bitrate_bps(head)
+    if not bps:
+        return None
+    return size / (bps / 8)
 
 
 def scan_mp3(root: Path) -> list[Path]:
@@ -106,6 +185,18 @@ def escape_concat_path(path: str) -> str:
     return path.replace("'", "'\\''")
 
 
+_FFMPEG_TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+
+
+def _format_hms(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 class MP3MergerPage(ToolPage):
     name = "MP3 Merger"
     description = "Gộp nhiều file MP3 thành 1 file duy nhất"
@@ -113,6 +204,8 @@ class MP3MergerPage(ToolPage):
     def __init__(self, parent: tk.Misc, app) -> None:
         self._files: list[Path] = []
         self._busy = False
+        self._cancel_flag = False
+        self._proc: subprocess.Popen | None = None
         super().__init__(parent, app)
 
     def build_ui(self, parent: tk.Misc) -> None:
@@ -129,27 +222,33 @@ class MP3MergerPage(ToolPage):
         tk.Label(card, text="Thư mục nguồn:", bg=CARD_BG, fg=LABEL_FG).grid(
             row=0, column=0, sticky="w", pady=4)
         self.src_var = tk.StringVar()
-        tk.Entry(card, textvariable=self.src_var).grid(
-            row=0, column=1, sticky="ew", padx=8, pady=4)
-        ttk.Button(card, text="Chọn...", command=self._pick_src).grid(
-            row=0, column=2, pady=4)
+        self.src_entry = tk.Entry(card, textvariable=self.src_var)
+        self.src_entry.grid(row=0, column=1, sticky="ew", padx=8, pady=4)
+        self.src_pick_btn = ttk.Button(card, text="Chọn...", command=self._pick_src)
+        self.src_pick_btn.grid(row=0, column=2, pady=4)
 
         tk.Label(card, text="File xuất ra:", bg=CARD_BG, fg=LABEL_FG).grid(
             row=1, column=0, sticky="w", pady=4)
         self.out_var = tk.StringVar()
-        tk.Entry(card, textvariable=self.out_var).grid(
-            row=1, column=1, sticky="ew", padx=8, pady=4)
-        ttk.Button(card, text="Lưu thành...", command=self._pick_out).grid(
-            row=1, column=2, pady=4)
+        self.out_entry = tk.Entry(card, textvariable=self.out_var)
+        self.out_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=4)
+        self.out_pick_btn = ttk.Button(card, text="Lưu thành...", command=self._pick_out)
+        self.out_pick_btn.grid(row=1, column=2, pady=4)
 
         card.columnconfigure(1, weight=1)
 
         bar = tk.Frame(outer, bg=PAGE_BG)
         bar.pack(fill="x", pady=(10, 8))
-        ttk.Button(bar, text="Quét", command=self._scan).pack(side="left")
+        self.scan_btn = ttk.Button(bar, text="Quét", command=self._scan)
+        self.scan_btn.pack(side="left")
         self.start_btn = ttk.Button(bar, text="Bắt đầu gộp", command=self._start)
         self.start_btn.pack(side="left", padx=8)
-        ttk.Button(bar, text="Xóa log", command=self._clear_log).pack(side="left")
+        self.cancel_btn = ttk.Button(
+            bar, text="Hủy", command=self._cancel, state="disabled"
+        )
+        self.cancel_btn.pack(side="left")
+        self.clear_log_btn = ttk.Button(bar, text="Xóa log", command=self._clear_log)
+        self.clear_log_btn.pack(side="left", padx=8)
         self.count_var = tk.StringVar(value="0 file")
         tk.Label(bar, textvariable=self.count_var, bg=PAGE_BG, fg=MUTED_FG).pack(side="right")
 
@@ -190,11 +289,8 @@ class MP3MergerPage(ToolPage):
         log_card.rowconfigure(0, weight=1)
         log_card.columnconfigure(0, weight=1)
 
-        self.status_var = tk.StringVar(value="Sẵn sàng")
-        tk.Label(
-            outer, textvariable=self.status_var, bg=PAGE_BG,
-            fg=MUTED_FG, anchor="w",
-        ).pack(fill="x", pady=(6, 0))
+        self.progress = ProgressPanel(outer)
+        self.progress.pack(fill="x", pady=(8, 0))
 
     def _pick_src(self) -> None:
         d = filedialog.askdirectory(title="Chọn thư mục cha chứa các file MP3")
@@ -217,7 +313,7 @@ class MP3MergerPage(ToolPage):
         if not src or not Path(src).is_dir():
             messagebox.showerror("Lỗi", "Hãy chọn thư mục nguồn hợp lệ.")
             return
-        self.status_var.set("Đang quét...")
+        self.progress.set_indeterminate("Đang quét...")
         self.frame.update_idletasks()
         files = scan_mp3(Path(src))
         self._files = files
@@ -225,7 +321,7 @@ class MP3MergerPage(ToolPage):
         for f in files:
             self.listbox.insert("end", str(f))
         self.count_var.set(f"{len(files)} file")
-        self.status_var.set(f"Tìm thấy {len(files)} file MP3")
+        self.progress.finish(f"Tìm thấy {len(files)} file MP3")
 
     def _start(self) -> None:
         if self._busy:
@@ -269,16 +365,56 @@ class MP3MergerPage(ToolPage):
                 pass
 
         self._busy = True
+        self._cancel_flag = False
+        self.app.begin_busy(self.name)
         self.start_btn.configure(state="disabled")
-        self.status_var.set("Đang gộp...")
+        self.cancel_btn.configure(state="normal")
+        self.progress.set_indeterminate("Đang tính tổng thời lượng...")
         threading.Thread(
-            target=self._do_merge,
+            target=self._do_merge_with_prep,
             args=(ffmpeg, list(self._files), out_path),
             daemon=True,
         ).start()
 
-    def _do_merge(self, ffmpeg: str, files: list[Path], out: Path) -> None:
+    def _do_merge_with_prep(
+        self, ffmpeg: str, files: list[Path], out: Path
+    ) -> None:
+        ffprobe = find_ffprobe()
+        total: float | None = 0.0
+        for f in files:
+            if self._cancel_flag:
+                break
+            d = mp3_duration(f, ffprobe)
+            if d is None:
+                total = None
+                break
+            total += d
+        if self._cancel_flag:
+            # Cancelled during pre-scan. Release the lock and reset state.
+            self.progress.set_indeterminate("Đã hủy")
+            self._busy = False
+            self._cancel_flag = False
+            self.frame.after(0, lambda: self.start_btn.configure(state="normal"))
+            self.frame.after(0, lambda: self.cancel_btn.configure(state="disabled"))
+            self.frame.after(0, lambda: self.app.end_busy(self.name))
+            return
+        if total is not None and total > 0:
+            self.progress.start("Đang gộp...")
+        else:
+            self.progress.set_indeterminate("Đang gộp... (không xác định được tiến độ)")
+        self._do_merge(ffmpeg, files, out, total)
+
+    def _do_merge(
+        self,
+        ffmpeg: str,
+        files: list[Path],
+        out: Path,
+        total_sec: float | None = None,
+    ) -> None:
         list_path: Optional[str] = None
+        success = False
+        error: str | None = None
+        cancelled = False
         try:
             with tempfile.NamedTemporaryFile(
                 "w", delete=False, suffix=".txt", encoding="utf-8"
@@ -297,7 +433,7 @@ class MP3MergerPage(ToolPage):
             ]
             self._log("Lệnh: " + subprocess.list2cmdline(cmd) + "\n")
 
-            proc = subprocess.Popen(
+            self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -306,33 +442,74 @@ class MP3MergerPage(ToolPage):
                 errors="replace",
                 creationflags=CREATE_NO_WINDOW,
             )
-            assert proc.stdout is not None
-            for line in proc.stdout:
+            assert self._proc.stdout is not None
+            for line in self._proc.stdout:
                 self._log(line)
-            rc = proc.wait()
+                if self._cancel_flag:
+                    try:
+                        self._proc.terminate()
+                    except OSError:
+                        pass
+                    break
+                if total_sec is not None:
+                    m = _FFMPEG_TIME_RE.search(line)
+                    if m:
+                        processed = (
+                            int(m.group(1)) * 3600
+                            + int(m.group(2)) * 60
+                            + float(m.group(3))
+                        )
+                        pct = min(99.5, processed / total_sec * 100.0)
+                        self.progress.set_progress(
+                            pct,
+                            f"Đang gộp: {_format_hms(processed)} / {_format_hms(total_sec)}",
+                        )
+            rc = self._proc.wait()
 
-            if rc == 0:
+            if self._cancel_flag:
+                cancelled = True
+            elif rc == 0:
+                success = True
                 self._log(f"\nHoàn tất. File: {out}\n")
-                self._set_status(f"Hoàn tất: {out}")
-                self.frame.after(0, lambda: messagebox.showinfo(
-                    "Hoàn tất", f"Đã gộp thành công:\n{out}"))
             else:
-                self._log(f"\nffmpeg kết thúc với mã {rc}\n")
-                self._set_status(f"Thất bại (mã {rc})")
-                self.frame.after(0, lambda: messagebox.showerror(
-                    "Thất bại", f"ffmpeg kết thúc với mã {rc}"))
+                error = f"ffmpeg kết thúc với mã {rc}"
+                self._log(f"\n{error}\n")
         except Exception as exc:
+            error = str(exc)
             self._log(f"\nLỗi: {exc}\n")
-            self._set_status(f"Lỗi: {exc}")
-            self.frame.after(0, lambda e=exc: messagebox.showerror("Lỗi", str(e)))
         finally:
             if list_path:
                 try:
                     os.unlink(list_path)
                 except OSError:
                     pass
-            self._busy = False
-            self.frame.after(0, lambda: self.start_btn.configure(state="normal"))
+            self._proc = None
+            self._on_merge_done(
+                cancelled=cancelled, success=success, error=error, out=out
+            )
+
+    def _on_merge_done(
+        self,
+        *,
+        cancelled: bool,
+        success: bool,
+        error: str | None,
+        out: Path,
+    ) -> None:
+        if success:
+            self.progress.finish(f"Hoàn tất: {out}")
+            self.frame.after(0, lambda: messagebox.showinfo(
+                "Hoàn tất", f"Đã gộp thành công:\n{out}"))
+        elif cancelled:
+            self.progress.set_indeterminate("Đã hủy")
+        elif error:
+            self.progress.set_indeterminate(f"Thất bại: {error}")
+            self.frame.after(0, lambda e=error: messagebox.showerror("Thất bại", e))
+        self._busy = False
+        self._cancel_flag = False
+        self.frame.after(0, lambda: self.start_btn.configure(state="normal"))
+        self.frame.after(0, lambda: self.cancel_btn.configure(state="disabled"))
+        self.frame.after(0, lambda: self.app.end_busy(self.name))
 
     def _log(self, msg: str) -> None:
         def do() -> None:
@@ -342,10 +519,35 @@ class MP3MergerPage(ToolPage):
             self.log_box.configure(state="disabled")
         self.frame.after(0, do)
 
-    def _set_status(self, msg: str) -> None:
-        self.frame.after(0, lambda: self.status_var.set(msg))
-
     def _clear_log(self) -> None:
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
+
+    def _cancel(self) -> None:
+        if not self._busy:
+            return
+        self._cancel_flag = True
+        self.progress.set_indeterminate("Đang hủy...")
+        proc = self._proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def set_busy_lock(self, locked: bool) -> None:
+        state = "disabled" if locked else "normal"
+        for w in (
+            self.src_entry, self.out_entry,
+            self.src_pick_btn, self.out_pick_btn,
+            self.scan_btn, self.start_btn, self.clear_log_btn,
+        ):
+            try:
+                w.configure(state=state)
+            except tk.TclError:
+                pass
+
+    def request_cancel(self) -> None:
+        if self._busy:
+            self._cancel()

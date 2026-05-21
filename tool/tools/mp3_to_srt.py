@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
 from .base import ToolPage
+from .progress import ProgressPanel
 
 
 SENTENCE_END = {".", "?", "!"}
@@ -216,8 +217,9 @@ def transcribe_mp3(
     model_dir: Path | None,
     device: str,
     on_log: Callable[[str], None],
-    on_progress: Callable[[float, str], None],
+    on_progress: Callable[[float, str, float, float], None],
     is_cancelled: Callable[[], bool],
+    on_phase: Callable[[str], None] | None = None,
 ) -> list[Word]:
     if model_dir is None:
         raise ModelMissingError("Không tìm thấy model. Hãy tải model trước.")
@@ -225,6 +227,8 @@ def transcribe_mp3(
     on_log("Đang nạp model...\n")
     model, device_label = _load_model(model_dir, device)
     on_log(f"Đã nạp model trên {device_label}.\n")
+    if on_phase is not None:
+        on_phase("transcribe")
 
     segments, info = model.transcribe(
         str(mp3_path),
@@ -250,7 +254,12 @@ def transcribe_mp3(
             collected.append(Word(start=float(segment.start), end=float(segment.end), text=segment.text))
 
         pct = min(99.0, (segment.end / duration) * 100.0)
-        on_progress(pct, f"Đang phiên âm... {pct:.0f}%")
+        on_progress(
+            pct,
+            f"Đang phiên âm: {_format_timestamp(segment.end)} / {_format_timestamp(duration)}",
+            float(segment.end),
+            duration,
+        )
 
     return collected
 
@@ -502,40 +511,42 @@ class MP3ToSrtPage(ToolPage):
         tk.Label(card, text="File MP3:", bg=CARD_BG, fg=LABEL_FG).grid(
             row=0, column=0, sticky="w", pady=4)
         self.src_var = tk.StringVar()
-        tk.Entry(card, textvariable=self.src_var).grid(
-            row=0, column=1, sticky="ew", padx=8, pady=4)
-        ttk.Button(card, text="Chọn...", command=self._pick_src).grid(
-            row=0, column=2, pady=4)
+        self.src_entry = tk.Entry(card, textvariable=self.src_var)
+        self.src_entry.grid(row=0, column=1, sticky="ew", padx=8, pady=4)
+        self.src_pick_btn = ttk.Button(card, text="Chọn...", command=self._pick_src)
+        self.src_pick_btn.grid(row=0, column=2, pady=4)
 
         tk.Label(card, text="File xuất ra:", bg=CARD_BG, fg=LABEL_FG).grid(
             row=1, column=0, sticky="w", pady=4)
         self.out_var = tk.StringVar()
-        tk.Entry(card, textvariable=self.out_var).grid(
-            row=1, column=1, sticky="ew", padx=8, pady=4)
-        ttk.Button(card, text="Lưu thành...", command=self._pick_out).grid(
-            row=1, column=2, pady=4)
+        self.out_entry = tk.Entry(card, textvariable=self.out_var)
+        self.out_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=4)
+        self.out_pick_btn = ttk.Button(card, text="Lưu thành...", command=self._pick_out)
+        self.out_pick_btn.grid(row=1, column=2, pady=4)
 
         tk.Label(card, text="Thiết bị:", bg=CARD_BG, fg=LABEL_FG).grid(
             row=2, column=0, sticky="w", pady=4)
         self.device_select_var = tk.StringVar(value=DEVICE_LABELS[DEVICE_CPU])
-        ttk.Combobox(
+        self.device_combo = ttk.Combobox(
             card,
             textvariable=self.device_select_var,
             values=[DEVICE_LABELS[DEVICE_CPU], DEVICE_LABELS[DEVICE_GPU]],
             state="readonly",
             width=18,
-        ).grid(row=2, column=1, sticky="w", padx=8, pady=4)
+        )
+        self.device_combo.grid(row=2, column=1, sticky="w", padx=8, pady=4)
 
         tk.Label(card, text="Model:", bg=CARD_BG, fg=LABEL_FG).grid(
             row=3, column=0, sticky="w", pady=4)
         self.model_size_var = tk.StringVar(value=DEFAULT_MODEL_SIZE)
-        ttk.Combobox(
+        self.model_combo = ttk.Combobox(
             card,
             textvariable=self.model_size_var,
             values=[f"{name} ({MODEL_SIZE_HINTS[name]})" for name in MODEL_SIZES],
             state="readonly",
             width=24,
-        ).grid(row=3, column=1, sticky="w", padx=8, pady=4)
+        )
+        self.model_combo.grid(row=3, column=1, sticky="w", padx=8, pady=4)
         self.model_size_var.set(f"{DEFAULT_MODEL_SIZE} ({MODEL_SIZE_HINTS[DEFAULT_MODEL_SIZE]})")
 
         card.columnconfigure(1, weight=1)
@@ -546,7 +557,8 @@ class MP3ToSrtPage(ToolPage):
         self.start_btn.pack(side="left")
         self.cancel_btn = ttk.Button(bar, text="Hủy", command=self._cancel, state="disabled")
         self.cancel_btn.pack(side="left", padx=8)
-        ttk.Button(bar, text="Xóa log", command=self._clear_log).pack(side="left")
+        self.clear_log_btn = ttk.Button(bar, text="Xóa log", command=self._clear_log)
+        self.clear_log_btn.pack(side="left")
 
         log_card = tk.LabelFrame(
             outer, text=" Nhật ký ", bg=CARD_BG, fg=LABEL_FG,
@@ -565,11 +577,8 @@ class MP3ToSrtPage(ToolPage):
         log_card.rowconfigure(0, weight=1)
         log_card.columnconfigure(0, weight=1)
 
-        self.status_var = tk.StringVar(value="Sẵn sàng")
-        tk.Label(
-            outer, textvariable=self.status_var, bg=PAGE_BG,
-            fg=MUTED_FG, anchor="w",
-        ).pack(fill="x", pady=(6, 0))
+        self.progress = ProgressPanel(outer)
+        self.progress.pack(fill="x", pady=(8, 0))
 
     def _pick_src(self) -> None:
         f = filedialog.askopenfilename(
@@ -603,9 +612,6 @@ class MP3ToSrtPage(ToolPage):
             self.log_box.configure(state="disabled")
         self.frame.after(0, do)
 
-    def _set_status(self, msg: str) -> None:
-        self.frame.after(0, lambda: self.status_var.set(msg))
-
     def _selected_device(self) -> str:
         label = self.device_select_var.get()
         return DEVICE_GPU if label == DEVICE_LABELS[DEVICE_GPU] else DEVICE_CPU
@@ -620,7 +626,7 @@ class MP3ToSrtPage(ToolPage):
     def _cancel(self) -> None:
         if self._busy:
             self._cancel_flag = True
-            self._set_status("Đang hủy...")
+            self.progress.set_indeterminate("Đang hủy...")
 
     def _start(self) -> None:
         if self._busy:
@@ -661,16 +667,16 @@ class MP3ToSrtPage(ToolPage):
                 if not success:
                     if error:
                         messagebox.showerror("Lỗi tải model", error)
-                    self._set_status("Sẵn sàng")
+                    self.progress.reset()
                     return
                 retry_dir = find_model_dir(model_size)
                 if retry_dir is None:
                     messagebox.showerror("Lỗi", "Tải xong nhưng vẫn không tìm thấy model.")
-                    self._set_status("Sẵn sàng")
+                    self.progress.reset()
                     return
                 self._launch_transcription(src_path, out_path, retry_dir, device)
 
-            self._set_status("Đang tải model...")
+            self.progress.set_indeterminate("Đang tải model...")
             ModelDownloadDialog(
                 self.frame,
                 target_dir=target_dir,
@@ -686,9 +692,10 @@ class MP3ToSrtPage(ToolPage):
     def _launch_transcription(self, src_path: Path, out_path: Path, model_dir: Path, device: str) -> None:
         self._busy = True
         self._cancel_flag = False
+        self.app.begin_busy(self.name)
         self.start_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
-        self._set_status("Đang nạp model...")
+        self.progress.set_indeterminate("Đang nạp model...")
         threading.Thread(
             target=self._do_run,
             args=(src_path, out_path, model_dir, device),
@@ -696,37 +703,68 @@ class MP3ToSrtPage(ToolPage):
         ).start()
 
     def _do_run(self, mp3_path: Path, out_path: Path, model_dir: Path, device: str) -> None:
+        def on_progress(pct: float, msg: str, cur: float, total: float) -> None:
+            self.progress.set_progress(pct, msg)
+
+        def on_phase(phase: str) -> None:
+            if phase == "transcribe":
+                self.progress.start("Đang phiên âm...")
+
         try:
             words = transcribe_mp3(
                 mp3_path=mp3_path,
                 model_dir=model_dir,
                 device=device,
                 on_log=self._log,
-                on_progress=lambda pct, msg: self._set_status(msg),
+                on_progress=on_progress,
                 is_cancelled=lambda: self._cancel_flag,
+                on_phase=on_phase,
             )
             if self._cancel_flag:
                 raise CancelledError()
-            self._set_status("Đang ghi SRT...")
+            self.progress.set_indeterminate("Đang ghi SRT...")
             cues = pack_cues(words)
             write_srt(cues, out_path)
             self._log(f"\nĐã ghi {len(cues)} cue → {out_path}\n")
-            self._set_status(f"Hoàn tất: {out_path}")
+            self.progress.finish(f"Hoàn tất: {out_path.name}")
             self.frame.after(0, lambda: messagebox.showinfo(
                 "Hoàn tất", f"Đã tạo phụ đề:\n{out_path}"))
         except CancelledError:
             self._log("\nĐã hủy.\n")
-            self._set_status("Đã hủy")
+            self.progress.set_indeterminate("Đã hủy")
         except ModelMissingError as exc:
             self._log(f"\n{exc}\n")
-            self._set_status("Thiếu model")
+            self.progress.set_indeterminate("Thiếu model")
             self.frame.after(0, lambda e=exc: messagebox.showerror("Thiếu model", str(e)))
         except Exception as exc:
             self._log(f"\nLỗi: {exc}\n")
-            self._set_status(f"Lỗi: {exc}")
+            self.progress.set_indeterminate(f"Lỗi: {exc}")
             self.frame.after(0, lambda e=exc: messagebox.showerror("Lỗi", str(e)))
         finally:
             self._busy = False
             self._cancel_flag = False
             self.frame.after(0, lambda: self.start_btn.configure(state="normal"))
             self.frame.after(0, lambda: self.cancel_btn.configure(state="disabled"))
+            self.frame.after(0, lambda: self.app.end_busy(self.name))
+
+    def set_busy_lock(self, locked: bool) -> None:
+        state = "disabled" if locked else "normal"
+        for w in (
+            self.src_entry, self.out_entry,
+            self.src_pick_btn, self.out_pick_btn,
+            self.start_btn, self.clear_log_btn,
+        ):
+            try:
+                w.configure(state=state)
+            except tk.TclError:
+                pass
+        combo_state = "disabled" if locked else "readonly"
+        for c in (self.device_combo, self.model_combo):
+            try:
+                c.configure(state=combo_state)
+            except tk.TclError:
+                pass
+
+    def request_cancel(self) -> None:
+        if self._busy:
+            self._cancel()

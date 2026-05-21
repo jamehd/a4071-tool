@@ -26,3 +26,12 @@ class ToolPage(ABC):
 
     def hide(self) -> None:
         self.frame.pack_forget()
+
+    def set_busy_lock(self, locked: bool) -> None:
+        """Disable / re-enable input controls on this page.
+        Override in concrete tools. Cancel buttons stay under the tool's
+        own start/finish logic and should NOT be touched here."""
+
+    def request_cancel(self) -> None:
+        """Request cancellation of the currently running job, if any.
+        Override in concrete tools that support cancel."""

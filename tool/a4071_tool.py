@@ -57,21 +57,26 @@ class SidebarItem(tk.Frame):
         self._label.pack(fill="x")
         self._on_click = on_click
         self._active = False
+        self._enabled = True
         for widget in (self, self._label):
             widget.bind("<Button-1>", self._click)
             widget.bind("<Enter>", self._enter)
             widget.bind("<Leave>", self._leave)
 
     def _click(self, _evt) -> None:
+        if not self._enabled:
+            return
         self._on_click()
 
     def _enter(self, _evt) -> None:
-        if not self._active:
-            self._set_bg(SIDEBAR_HOVER)
+        if not self._enabled or self._active:
+            return
+        self._set_bg(SIDEBAR_HOVER)
 
     def _leave(self, _evt) -> None:
-        if not self._active:
-            self._set_bg(SIDEBAR_BG)
+        if not self._enabled or self._active:
+            return
+        self._set_bg(SIDEBAR_BG)
 
     def _set_bg(self, color: str) -> None:
         self.configure(bg=color)
@@ -80,6 +85,18 @@ class SidebarItem(tk.Frame):
     def set_active(self, active: bool) -> None:
         self._active = active
         self._set_bg(SIDEBAR_ACTIVE if active else SIDEBAR_BG)
+        self._apply_fg()
+
+    def set_enabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+        self.configure(cursor="hand2" if enabled else "arrow")
+        self._apply_fg()
+
+    def _apply_fg(self) -> None:
+        if not self._enabled:
+            self._label.configure(fg=SIDEBAR_MUTED_FG)
+        else:
+            self._label.configure(fg=SIDEBAR_FG)
 
 
 class A4071App(tk.Tk):
@@ -94,11 +111,19 @@ class A4071App(tk.Tk):
         self._sidebar_items: dict[str, SidebarItem] = {}
         self._active_key: str | None = None
         self._api_key: str | None = None
+        self._busy_owner: str | None = None
+        self._logout_btn: tk.Label | None = None
+        self._logout_enabled: bool = True
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(0, self._bootstrap)
 
     def _on_close(self) -> None:
+        if self._busy_owner and self._busy_owner in self._pages:
+            try:
+                self._pages[self._busy_owner].request_cancel()
+            except Exception:
+                pass
         try:
             self.withdraw()
         except tk.TclError:
@@ -210,12 +235,13 @@ class A4071App(tk.Tk):
         )
         self._page_desc.pack(side="left", fill="y")
 
-        logout_btn = tk.Label(
+        self._logout_btn = tk.Label(
             header, text="Đăng xuất", bg=HEADER_BG, fg=HEADER_LINK_FG,
             font=("Segoe UI", 9, "underline"), padx=20, cursor="hand2",
         )
-        logout_btn.pack(side="right", fill="y")
-        logout_btn.bind("<Button-1>", lambda _e: self._on_logout())
+        self._logout_btn.pack(side="right", fill="y")
+        self._logout_btn.bind("<Button-1>", lambda _e: self._on_logout_clicked())
+        self._logout_enabled = True
 
         if name:
             tk.Label(
@@ -256,6 +282,42 @@ class A4071App(tk.Tk):
             current_version=APP_VERSION,
             current_exe=current_exe,
         )
+
+    def _on_logout_clicked(self) -> None:
+        if not self._logout_enabled:
+            return
+        self._on_logout()
+
+    def _set_logout_enabled(self, enabled: bool) -> None:
+        self._logout_enabled = enabled
+        if self._logout_btn is None:
+            return
+        self._logout_btn.configure(
+            fg=HEADER_LINK_FG if enabled else HEADER_MUTED_FG,
+            cursor="hand2" if enabled else "arrow",
+        )
+
+    def begin_busy(self, owner: str) -> None:
+        if self._busy_owner is not None:
+            return
+        self._busy_owner = owner
+        self._apply_busy_lock(True)
+
+    def end_busy(self, owner: str) -> None:
+        if self._busy_owner != owner:
+            return
+        self._busy_owner = None
+        self._apply_busy_lock(False)
+
+    def _apply_busy_lock(self, locked: bool) -> None:
+        for item in self._sidebar_items.values():
+            item.set_enabled(not locked)
+        self._set_logout_enabled(not locked)
+        for page in self._pages.values():
+            try:
+                page.set_busy_lock(locked)
+            except tk.TclError:
+                pass
 
     def _on_logout(self) -> None:
         clear_config()
