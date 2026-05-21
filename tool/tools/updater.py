@@ -187,16 +187,18 @@ if %tries% lss 10 (
 del "%~f0"
 exit /b 1
 :launch
-start "" "{CURRENT_EXE}"
+timeout /t 2 /nobreak >nul
+start "" /D "{CURRENT_EXE_DIR}" "{CURRENT_EXE}"
 (goto) 2>nul & del "%~f0"
 """
 
 
-def _render_updater_bat(pid: int, new_exe: str, current_exe: str) -> str:
+def _render_updater_bat(pid: int, new_exe: str, current_exe: str, current_exe_dir: str) -> str:
     return (
         _UPDATER_BAT_TEMPLATE
         .replace("{PID}", str(pid))
         .replace("{NEW_EXE}", new_exe)
+        .replace("{CURRENT_EXE_DIR}", current_exe_dir)
         .replace("{CURRENT_EXE}", current_exe)
     )
 
@@ -205,7 +207,12 @@ def apply_update_and_exit(new_exe: Path, current_exe: Path) -> None:
     pid = os.getpid()
     bat_path = Path(tempfile.gettempdir()) / f"a4071-update-{pid}.bat"
     bat_path.write_text(
-        _render_updater_bat(pid, str(new_exe), str(current_exe)),
+        _render_updater_bat(
+            pid,
+            str(new_exe),
+            str(current_exe),
+            str(current_exe.parent),
+        ),
         encoding="utf-8",
     )
 
