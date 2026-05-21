@@ -93,7 +93,15 @@ class A4071App(tk.Tk):
         self._sidebar_items: dict[str, SidebarItem] = {}
         self._active_key: str | None = None
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(0, self._bootstrap)
+
+    def _on_close(self) -> None:
+        try:
+            self.withdraw()
+        except tk.TclError:
+            pass
+        self.destroy()
 
     def _bootstrap(self) -> None:
         cfg = load_config()
